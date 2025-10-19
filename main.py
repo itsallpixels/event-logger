@@ -17,15 +17,18 @@ DATABASE_FILE = "players.csv"
 
 def get_player_id_from_csv(username, db_dataframe):
     """
-    Fetches a player's Discord User ID from the provided DataFrame.
-    Assumes the CSV has 'roblox_username' and 'discord_userid' columns.
+    [UPGRADED] Fetches a player's Discord User ID using a flexible "contains" search.
+    This is more resilient to OCR errors (e.g., finding 'ItzzRoBdabest' within 'SLAYER_ItzzRoBdabest').
     """
     if db_dataframe.empty:
         return None
-    # .str.lower() makes the comparison case-insensitive
-    result = db_dataframe[db_dataframe['roblox_username'].str.lower() == username.lower()]
+    
+    # The new logic: check if any roblox_username in the DB contains the found username
+    # This is much more robust than an exact match.
+    result = db_dataframe[db_dataframe['roblox_username'].str.lower().str.contains(username.lower(), na=False)]
+    
     if not result.empty:
-        # Return the value from the 'discord_userid' column
+        # If there are multiple potential matches, we take the first one.
         return result['discord_userid'].iloc[0]
     return None
 
@@ -58,18 +61,16 @@ def parse_leaderboard_text(text):
         if len(numbers_in_line) < 2:
             continue
         
-        # New Logic: Find all non-numeric words and pick the best candidate (longest one)
-        # This prevents icons (read as "B" or "@") from being chosen as the name.
         name_candidates = []
         for word in line.split():
-            cleaned_word = re.sub(r'[^\w-]', '', word)
+            # Clean the word of punctuation and strip leading/trailing underscores
+            cleaned_word = re.sub(r'[^\w-]', '', word).strip('-_')
             if cleaned_word and not cleaned_word.isdigit():
                 name_candidates.append(cleaned_word)
 
         if not name_candidates:
             continue
             
-        # The longest word is the most likely username
         potential_name = max(name_candidates, key=len)
         
         if len(potential_name) > 2 and potential_name.lower() not in ['japan', 'usa', 'team']:
@@ -79,8 +80,7 @@ def parse_leaderboard_text(text):
 
 def format_discord_report(matched_discord_ids):
     """
-    [UPGRADED] Formats the list of matched Discord User IDs into a Discord markdown block.
-    Uses the correct <@UserID> syntax for mentions.
+    Formats the list of matched Discord User IDs into a Discord markdown block.
     """
     report_lines = [
         "Event ID: [fill this in]",
@@ -92,7 +92,6 @@ def format_discord_report(matched_discord_ids):
     
     if matched_discord_ids:
         for user_id in matched_discord_ids:
-            # This format creates a clickable mention in Discord
             report_lines.append(f"- <@{user_id}>")
     else:
         report_lines.append("- (No attendees from the leaderboard were found in the database)")
@@ -104,10 +103,8 @@ st.set_page_config(page_title="Leaderboard to Discord Report Generator", layout=
 st.title("Leaderboard to Discord Report Generator")
 st.write(f"Upload a **Roblox Leaderboard screenshot**. The app will find players, look up their **Discord User ID** from `{DATABASE_FILE}`, and generate a formatted event report.")
 
-# Load the player database at the start
 try:
     player_db_df = pd.read_csv(DATABASE_FILE)
-    # Check if the required columns exist
     if 'roblox_username' not in player_db_df.columns or 'discord_userid' not in player_db_df.columns:
         st.error(f"Error: Your '{DATABASE_FILE}' must contain the columns 'roblox_username' and 'discord_userid'.")
         player_db_df = pd.DataFrame()
@@ -141,9 +138,11 @@ if uploaded_file is not None:
                         for name in extracted_names:
                             discord_id = get_player_id_from_csv(name, player_db_df)
                             if discord_id:
-                                # Ensure it's treated as a string to avoid formatting issues
                                 matched_discord_ids.append(str(discord_id))
                         
+                        # Remove duplicates in case of multiple matches
+                        matched_discord_ids = list(dict.fromkeys(matched_discord_ids))
+
                         with st.spinner("Step 3/3: Building report..."):
                             discord_output = format_discord_report(matched_discord_ids)
 

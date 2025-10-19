@@ -5,15 +5,17 @@ import pytesseract
 import os
 import re
 from difflib import SequenceMatcher
+import base64
 
 # ==============================================================================
-# This app is designed for deployment on Streamlit Community Cloud.
-# It can process MULTIPLE screenshots, features a custom theme, and has
-# a retry mechanism for a better user experience.
+# This is the final version of the application.
+# It includes a full-page watermark logo, a custom theme, multi-file support,
+# and a retry mechanism.
 # ==============================================================================
 
 DATABASE_FILE = "players.csv"
 FUZZY_MATCH_THRESHOLD = 0.8
+LOGO_FILE = "logo.png" # The name of your logo file
 
 # --- Core Functions (No changes) ---
 
@@ -79,29 +81,62 @@ def format_discord_report(matched_discord_ids):
         report_lines.append("- (No attendees from the leaderboard were found in the database)")
     return "\n".join(report_lines)
 
-# --- Page Configuration with Custom Theme ---
+# --- NEW: Function to encode image to Base64 and inject CSS for watermark ---
+def set_watermark(file_path):
+    """Encodes the logo file to base64 and sets it as a watermark."""
+    if not os.path.exists(file_path):
+        st.warning(f"Warning: Watermark file '{file_path}' not found. Skipping watermark.")
+        return
+    
+    with open(file_path, "rb") as image_file:
+        encoded_string = base64.b64encode(image_file.read()).decode()
+    
+    st.markdown(
+        f"""
+        <style>
+        .stApp {{
+            background-color: #0F1116; /* Midnight Blue fallback */
+        }}
+        .stApp::before {{
+            content: "";
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 100vw;
+            height: 100vh;
+            background-image: url("data:image/png;base64,{encoded_string}");
+            background-position: center center;
+            background-repeat: no-repeat;
+            background-size: 40% auto; /* Adjust size of watermark here */
+            opacity: 0.1; /* Adjust transparency of watermark here */
+            z-index: -1; /* Place it behind all content */
+        }}
+        /* ... (other theme styles) ... */
+        h1, h2, h3, h4, h5, h6 {{ color: #FFD700; }}
+        .stButton>button {{ color: #0F1116; background-color: #FFD700; border-color: #FFD700; }}
+        [data-testid="stFileUploader"] label {{ color: #FFD700; border-color: #FFD700; }}
+        [data-testid="stExpander"] summary {{ color: #FFD700; }}
+        [data-testid="stInfo"] {{ border-left-color: #FFD700; }}
+        [data-testid="stSpinner"] > div {{ border-top-color: #FFD700; }}
+        [data-testid="stProgressBar"] > div > div {{ background-image: linear-gradient(to right, #FFD700, #FFD700); }}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+# --- Page Configuration and Theme/Watermark Application ---
 st.set_page_config(
     page_title="Multi-Screenshot Report Generator",
+    page_icon=LOGO_FILE, # Sets the favicon
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-st.markdown("""
-<style>
-    .stApp { background-color: #0F1116; }
-    h1, h2, h3, h4, h5, h6 { color: #FFD700; }
-    .stButton>button {
-        color: #0F1116;
-        background-color: #FFD700;
-        border-color: #FFD700;
-    }
-    .stDataFrame, .stCodeBlock { color: #FFFFFF; }
-</style>
-""", unsafe_allow_html=True)
-
+# Apply the watermark and the rest of the theme
+set_watermark(LOGO_FILE)
 
 # --- Streamlit GUI ---
-st.title("Multi-Screenshot Leaderboard Report Generator")
+st.title("Leaderboard Report Generator")
 st.write(f"Upload **one or more Roblox Leaderboard screenshots**. The app will combine the results, find unique players, and generate a single formatted event report.")
 
 try:
@@ -126,15 +161,13 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    # --- NEW: Display images neatly in a collapsible expander ---
     with st.expander(f"View the {len(uploaded_files)} uploaded screenshot(s)..."):
-        # Display the images as small thumbnails
-        cols = st.columns(min(len(uploaded_files), 8)) # Show max 8 thumbnails per row
+        cols = st.columns(min(len(uploaded_files), 8))
         for i, uploaded_file in enumerate(uploaded_files):
             with cols[i % 8]:
                 st.image(uploaded_file, caption=f"Image {i+1}", width=150)
     
-    st.write("---") # Visual separator
+    st.write("---")
 
     if st.button("Generate Discord Report from All Screenshots"):
         if player_db_df.empty:

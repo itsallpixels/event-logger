@@ -15,7 +15,7 @@ from difflib import SequenceMatcher
 DATABASE_FILE = "players.csv"
 FUZZY_MATCH_THRESHOLD = 0.8
 
-# --- Core Functions (No changes needed) ---
+# --- Core Functions (No changes) ---
 
 def get_player_id_from_csv(username, db_dataframe):
     """[HYBRID] Fetches a player's Discord User ID using a robust two-step approach."""
@@ -79,34 +79,23 @@ def format_discord_report(matched_discord_ids):
         report_lines.append("- (No attendees from the leaderboard were found in the database)")
     return "\n".join(report_lines)
 
-# --- NEW: Page Configuration with Custom Theme ---
+# --- Page Configuration with Custom Theme ---
 st.set_page_config(
     page_title="Multi-Screenshot Report Generator",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# Custom CSS to inject the theme
 st.markdown("""
 <style>
-    /* Main background */
-    .stApp {
-        background-color: #0F1116;
-    }
-    /* Gold for headers */
-    h1, h2, h3, h4, h5, h6 {
-        color: #FFD700;
-    }
-    /* Gold for button text and other elements */
+    .stApp { background-color: #0F1116; }
+    h1, h2, h3, h4, h5, h6 { color: #FFD700; }
     .stButton>button {
-        color: #0F1116; /* Dark text for contrast on gold button */
+        color: #0F1116;
         background-color: #FFD700;
         border-color: #FFD700;
     }
-    /* Ensure text in dataframes is readable */
-    .stDataFrame, .stCodeBlock {
-        color: #FFFFFF;
-    }
+    .stDataFrame, .stCodeBlock { color: #FFFFFF; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -124,7 +113,6 @@ except FileNotFoundError:
     st.error(f"Error: The database file '{DATABASE_FILE}' was not found. Please upload it to your GitHub repository.")
     player_db_df = pd.DataFrame()
 
-# --- NEW: Initialize Session State ---
 if 'report_generated' not in st.session_state:
     st.session_state.report_generated = False
     st.session_state.discord_output = ""
@@ -138,14 +126,16 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    st.write("---")
-    # Display the images in columns for a neat layout
-    cols = st.columns(min(len(uploaded_files), 5)) # Show max 5 images per row
-    for i, uploaded_file in enumerate(uploaded_files):
-        with cols[i % 5]:
-            st.image(uploaded_file, use_column_width=True)
+    # --- NEW: Display images neatly in a collapsible expander ---
+    with st.expander(f"View the {len(uploaded_files)} uploaded screenshot(s)..."):
+        # Display the images as small thumbnails
+        cols = st.columns(min(len(uploaded_files), 8)) # Show max 8 thumbnails per row
+        for i, uploaded_file in enumerate(uploaded_files):
+            with cols[i % 8]:
+                st.image(uploaded_file, caption=f"Image {i+1}", width=150)
+    
+    st.write("---") # Visual separator
 
-    # --- UPDATED: Button logic now sets session state ---
     if st.button("Generate Discord Report from All Screenshots"):
         if player_db_df.empty:
             st.warning(f"Cannot process because the '{DATABASE_FILE}' file is missing, empty, or has incorrect columns.")
@@ -173,10 +163,8 @@ if uploaded_files:
 
                     with st.spinner("Step 3/3: Building final report..."):
                         st.session_state.discord_output = format_discord_report(st.session_state.matched_ids)
-                        st.session_state.report_generated = True # Signal that the report is ready
+                        st.session_state.report_generated = True
 
-# --- NEW: Results and Retry Button Block ---
-# This block only appears after a report has been generated
 if st.session_state.report_generated:
     st.write("---")
     st.subheader("✅ Your Combined Discord Report is Ready!")
@@ -192,10 +180,9 @@ if st.session_state.report_generated:
         else:
             st.warning(f"No players from any screenshot were found in {DATABASE_FILE}.")
 
-    # The retry button clears the session state, hiding this block and allowing a new run
     if st.button("Start Over / Retry"):
         st.session_state.report_generated = False
         st.session_state.discord_output = ""
         st.session_state.unique_names = []
         st.session_state.matched_ids = []
-        st.rerun() # Rerun the script to reflect the changes
+        st.rerun()

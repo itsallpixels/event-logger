@@ -4,32 +4,48 @@ from PIL import Image
 import pytesseract
 import os
 import re
+from difflib import SequenceMatcher
 
 # ==============================================================================
 # This app is designed for deployment on Streamlit Community Cloud.
-# It parses a ROBLOX LEADERBOARD screenshot and formats the output
-# for a DISCORD EVENT LOG using User IDs for mentions.
+# It uses Fuzzy String Matching for superior accuracy against OCR errors.
 # ==============================================================================
 
 DATABASE_FILE = "players.csv"
+# The similarity threshold for a fuzzy match (0.8 = 80% similar)
+# This is tunable. Higher is stricter, lower is more lenient.
+MATCH_THRESHOLD = 0.8
 
 # --- Database and OCR Functions ---
 
 def get_player_id_from_csv(username, db_dataframe):
     """
-    [UPGRADED] Fetches a player's Discord User ID using a flexible "contains" search.
-    This is more resilient to OCR errors (e.g., finding 'ItzzRoBdabest' within 'SLAYER_ItzzRoBdabest').
+    [UPGRADED] Fetches a player's Discord User ID using Fuzzy String Matching.
+    This finds the best match in the database and accepts it if the similarity
+    is above the MATCH_THRESHOLD.
     """
     if db_dataframe.empty:
         return None
     
-    # The new logic: check if any roblox_username in the DB contains the found username
-    # This is much more robust than an exact match.
-    result = db_dataframe[db_dataframe['roblox_username'].str.lower().str.contains(username.lower(), na=False)]
+    best_match_score = 0.0
+    best_match_id = None
     
-    if not result.empty:
-        # If there are multiple potential matches, we take the first one.
-        return result['discord_userid'].iloc[0]
+    # Iterate through every player in the database to find the best possible match
+    for index, row in db_dataframe.iterrows():
+        db_username = row['roblox_username']
+        
+        # Calculate the similarity ratio between the OCR'd name and the database name
+        similarity = SequenceMatcher(None, username.lower(), db_username.lower()).ratio()
+        
+        if similarity > best_match_score:
+            best_match_score = similarity
+            best_match_id = row['discord_userid']
+            
+    # If the best match we found is good enough, return the ID
+    if best_match_score >= MATCH_THRESHOLD:
+        return best_match_id
+        
+    # Otherwise, we conclude there was no confident match
     return None
 
 def extract_text_from_image(image):
@@ -44,8 +60,7 @@ def extract_text_from_image(image):
 
 def parse_leaderboard_text(text):
     """
-    [UPGRADED] Parses raw OCR text to extract player names from a Roblox leaderboard.
-    This version is more robust and handles OCR errors from player icons.
+    Parses raw OCR text to extract player names from within a Roblox leaderboard.
     """
     player_names = []
     lines = text.strip().split('\n')
@@ -53,17 +68,16 @@ def parse_leaderboard_text(text):
         start_index = next(i for i, line in enumerate(lines) if "leaderboard" in line.lower())
         relevant_lines = lines[start_index + 1:]
     except StopIteration:
-        st.warning("Could not find the 'Leaderboard' title. Results may be inaccurate.")
+        # For cropped images that don't have the word "leaderboard"
         relevant_lines = lines
 
     for line in relevant_lines:
-        numbers_in_line = re.findall(r'\b\d{1,4}(?:,\d{3})*\b', line)
-        if len(numbers_in_line) < 2:
+        # A valid player line should have at least one number
+        if not any(char.isdigit() for char in line):
             continue
         
         name_candidates = []
         for word in line.split():
-            # Clean the word of punctuation and strip leading/trailing underscores
             cleaned_word = re.sub(r'[^\w-]', '', word).strip('-_')
             if cleaned_word and not cleaned_word.isdigit():
                 name_candidates.append(cleaned_word)
@@ -140,7 +154,6 @@ if uploaded_file is not None:
                             if discord_id:
                                 matched_discord_ids.append(str(discord_id))
                         
-                        # Remove duplicates in case of multiple matches
                         matched_discord_ids = list(dict.fromkeys(matched_discord_ids))
 
                         with st.spinner("Step 3/3: Building report..."):

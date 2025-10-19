@@ -9,8 +9,7 @@ import base64
 
 # ==============================================================================
 # This is the definitive final version of the application.
-# It is streamlined for its core purpose, with interactive thumbnails
-# and highly accurate score parsing.
+# It includes the fix for the interactive image dialog.
 # ==============================================================================
 
 # --- Robust Path Configuration ---
@@ -125,10 +124,8 @@ set_watermark(LOGO_FILE)
 # --- Session State Init ---
 if 'report_generated' not in st.session_state:
     st.session_state.report_generated = False
-    st.session_state.discord_output = ""
-    st.session_state.unique_players = []
-    st.session_state.players_with_scores = []
-    st.session_state.show_image_index = -1
+if 'show_image' not in st.session_state:
+    st.session_state.show_image = None
 
 # --- Main App ---
 st.title("Blitzmarine Event-Logger")
@@ -143,6 +140,15 @@ except FileNotFoundError:
     st.error(f"Error: The database file '{os.path.basename(DATABASE_FILE)}' was not found in the GitHub repository. Please upload it.")
     player_db_df = pd.DataFrame()
 
+# --- NEW: Image Dialog Logic ---
+# This dialog will appear if session_state.show_image is set to an image object
+if st.session_state.show_image:
+    with st.dialog("Viewing Full Screenshot"):
+        st.image(st.session_state.show_image)
+        if st.button("Close", key="close_dialog"):
+            st.session_state.show_image = None
+            st.rerun()
+
 uploaded_files = st.file_uploader(
     "Upload one or more leaderboard screenshots",
     type=["png", "jpg", "jpeg"],
@@ -155,71 +161,63 @@ if uploaded_files:
         for i, uploaded_file in enumerate(uploaded_files):
             with cols[i % 8]:
                 st.image(uploaded_file, caption=f"Image {i+1}", width=150)
+                # This button sets the session state to the image object itself
                 if st.button(f"View Full", key=f"view_{i}"):
-                    st.session_state.show_image_index = i
+                    st.session_state.show_image = uploaded_file
+                    st.rerun()
     
-    if st.session_state.show_image_index != -1:
-        with st.dialog(f"Viewing Image {st.session_state.show_image_index + 1}"):
-            st.image(uploaded_files[st.session_state.show_image_index])
-            if st.button("Close", key="close_dialog"):
-                st.session_state.show_image_index = -1
-                st.rerun()
-
     st.info("Please select which of the numeric columns represents the players' scores.")
-    # --- UPDATED: Radio button labels ---
     score_column_options = ("First Column", "Second Column", "Third Column")
-    selected_column = st.radio(
-        "Which column is the score?",
-        score_column_options,
-        horizontal=True,
-    )
+    selected_column = st.radio("Which column is the score?", score_column_options, horizontal=True)
     score_column_index = score_column_options.index(selected_column)
 
     st.write("---")
     
     if st.button("Generate Discord Report from All Screenshots"):
-        if player_db_df.empty:
-            st.warning("Cannot process because the player database file is missing, empty, or has incorrect columns.")
+        # When generating a report, store results in session_state
+        all_parsed_data = []
+        with st.spinner(f"Step 1/3: Analyzing {len(uploaded_files)} screenshot(s)..."):
+            for uploaded_file in uploaded_files:
+                image = Image.open(uploaded_file)
+                ocr_text = extract_text_from_image(image)
+                if ocr_text:
+                    all_parsed_data.extend(parse_leaderboard_text(ocr_text))
+        
+        if not all_parsed_data:
+            st.error("OCR could not detect any text in any of the uploaded images.")
         else:
-            all_parsed_data = []
-            with st.spinner(f"Step 1/3: Analyzing {len(uploaded_files)} screenshot(s)..."):
-                for uploaded_file in uploaded_files:
-                    image = Image.open(uploaded_file)
-                    ocr_text = extract_text_from_image(image)
-                    if ocr_text:
-                        data_from_image = parse_leaderboard_text(ocr_text)
-                        all_parsed_data.extend(data_from_image)
-            if not all_parsed_data:
-                st.error("OCR could not detect any text in any of the uploaded images.")
-            else:
-                unique_players_dict = {player['name']: player for player in reversed(all_parsed_data)}
-                st.session_state.unique_players = list(unique_players_dict.values())
-                with st.spinner("Step 2/3: Finding players, matching, and extracting scores..."):
-                    matched_ids = []
-                    players_with_scores = []
-                    for player in st.session_state.unique_players:
-                        discord_id = get_player_id_from_csv(player['name'], player_db_df)
-                        if discord_id:
-                            matched_ids.append(str(discord_id))
-                            try:
-                                score = player['stats'][score_column_index]
-                                players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': score})
-                            except IndexError:
-                                players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': 'N/A'})
-                    st.session_state.matched_ids = list(dict.fromkeys(matched_ids))
-                    st.session_state.players_with_scores = players_with_scores
-                    with st.spinner("Step 3/3: Building final report..."):
-                        st.session_state.discord_output = format_discord_report(st.session_state.matched_ids)
-                        st.session_state.report_generated = True
+            unique_players_dict = {player['name']: player for player in reversed(all_parsed_data)}
+            st.session_state.unique_players = list(unique_players_dict.values())
+            
+            with st.spinner("Step 2/3: Finding players, matching, and extracting scores..."):
+                matched_ids = []
+                players_with_scores = []
+                for player in st.session_state.unique_players:
+                    discord_id = get_player_id_from_csv(player['name'], player_db_df)
+                    if discord_id:
+                        matched_ids.append(str(discord_id))
+                        try:
+                            score = player['stats'][score_column_index]
+                            players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': score})
+                        except IndexError:
+                            players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': 'N/A'})
+                st.session_state.matched_ids = list(dict.fromkeys(matched_ids))
+                st.session_state.players_with_scores = players_with_scores
+                
+                with st.spinner("Step 3/3: Building final report..."):
+                    st.session_state.discord_output = format_discord_report(st.session_state.matched_ids)
+                    st.session_state.report_generated = True
+                    st.rerun() # Rerun once to display the final report block cleanly
 
+# This block displays the results if a report has been generated
 if st.session_state.report_generated:
     st.write("---")
     st.subheader("✅ Your Combined Discord Report is Ready!")
     st.info("Click the copy icon in the top-right of the box below, then paste directly into Discord.")
-    st.code(st.session_state.discord_output, language='markdown')
+    st.code(st.session_state.get('discord_output', ''))
 
     st.subheader("Player Scores")
-    if st.session_state.players_with_scores:
+    if st.session_state.get('players_with_scores'):
         score_df = pd.DataFrame(st.session_state.players_with_scores)
         st.dataframe(score_df, use_container_width=True)
     else:
@@ -227,10 +225,10 @@ if st.session_state.report_generated:
 
     with st.expander("See raw processing details"):
         st.write("**Unique Player Data Found (Name & Stats):**")
-        st.json(st.session_state.unique_players)
+        st.json(st.session_state.get('unique_players', []))
 
     if st.button("Start Over / Retry"):
-        for key in list(st.session_state.keys()):
-            if key != 'show_image_index': # Don't clear the dialog state
-                del st.session_state[key]
+        # Simplified reset logic
+        st.session_state.report_generated = False
+        st.session_state.show_image = None # Also reset the dialog state
         st.rerun()

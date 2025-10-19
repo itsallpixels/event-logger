@@ -9,19 +9,18 @@ import base64
 
 # ==============================================================================
 # This is the final version of the application.
-# It includes a robust full-page watermark logo, a custom theme, multi-file 
+# It includes a robust full-page watermark logo, a custom theme, multi-file
 # support, and a retry mechanism.
 # ==============================================================================
 
 # --- Robust Path Configuration ---
-# This ensures the script can always find its files, especially on Streamlit Cloud
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_FILE = os.path.join(SCRIPT_DIR, "players.csv")
 LOGO_FILE = os.path.join(SCRIPT_DIR, "logo.png")
 
 FUZZY_MATCH_THRESHOLD = 0.8
 
-# --- Core Functions (No changes) ---
+# --- Core Functions ---
 
 def get_player_id_from_csv(username, db_dataframe):
     """[HYBRID] Fetches a player's Discord User ID using a robust two-step approach."""
@@ -71,7 +70,10 @@ def parse_leaderboard_text(text):
     return player_names
 
 def format_discord_report(matched_discord_ids):
-    """Formats the list of matched Discord User IDs into a Discord markdown block."""
+    """
+    [UPDATED] Formats the list of matched Discord User IDs into a Discord markdown block.
+    Appends ' | V' to each attendee line.
+    """
     report_lines = [
         "Event ID: [fill this in]",
         "Length: [fill this in]",
@@ -80,15 +82,15 @@ def format_discord_report(matched_discord_ids):
         "Attendees:",
     ]
     if matched_discord_ids:
-        for user_id in matched_discord_ids: report_lines.append(f"- <@{user_id}>")
+        for user_id in matched_discord_ids:
+            # This is the updated line with the new formatting
+            report_lines.append(f"- <@{user_id}> | V")
     else:
         report_lines.append("- (No attendees from the leaderboard were found in the database)")
     return "\n".join(report_lines)
 
 def set_watermark(file_path):
-    """
-    Reads a logo file, encodes it to base64, and sets it as a full-page watermark.
-    """
+    """Reads a logo file, encodes it to base64, and sets it as a full-page watermark."""
     try:
         with open(file_path, "rb") as image_file:
             encoded_string = base64.b64encode(image_file.read()).decode()
@@ -211,4 +213,3 @@ if st.session_state.report_generated:
         st.session_state.unique_names = []
         st.session_state.matched_ids = []
         st.rerun()
-

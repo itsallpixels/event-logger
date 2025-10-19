@@ -9,8 +9,8 @@ import base64
 
 # ==============================================================================
 # This is the final version of the application.
-# It includes a robust full-page watermark logo, a custom theme, multi-file
-# support, and a retry mechanism.
+# It includes score extraction, a full-page watermark logo, a complete custom 
+# theme, multi-file support, and a retry mechanism.
 # ==============================================================================
 
 # --- Robust Path Configuration ---
@@ -20,7 +20,7 @@ LOGO_FILE = os.path.join(SCRIPT_DIR, "logo.png")
 
 FUZZY_MATCH_THRESHOLD = 0.8
 
-# --- Core Functions ---
+# --- Core Functions (No changes) ---
 
 def get_player_id_from_csv(username, db_dataframe):
     """[HYBRID] Fetches a player's Discord User ID using a robust two-step approach."""
@@ -49,8 +49,8 @@ def extract_text_from_image(image):
         return None
 
 def parse_leaderboard_text(text):
-    """Parses raw OCR text to extract player names from within a Roblox leaderboard."""
-    player_names = []
+    """[UPGRADED] Parses raw OCR text to extract player names AND all associated numeric columns."""
+    parsed_data = []
     lines = text.strip().split('\n')
     try:
         start_index = next(i for i, line in enumerate(lines) if "leaderboard" in line.lower())
@@ -58,7 +58,8 @@ def parse_leaderboard_text(text):
     except StopIteration:
         relevant_lines = lines
     for line in relevant_lines:
-        if not any(char.isdigit() for char in line): continue
+        numbers_on_line = [int(n.replace(',', '')) for n in re.findall(r'\b\d{1,3}(?:,\d{3})*|\d+\b', line)]
+        if not numbers_on_line: continue
         name_candidates = []
         for word in line.split():
             cleaned_word = re.sub(r'[^\w-]', '', word).strip('-_')
@@ -66,29 +67,18 @@ def parse_leaderboard_text(text):
         if not name_candidates: continue
         potential_name = max(name_candidates, key=len)
         if len(potential_name) > 2 and potential_name.lower() not in ['japan', 'usa', 'team']:
-            player_names.append(potential_name)
-    return player_names
+            parsed_data.append({'name': potential_name, 'stats': numbers_on_line})
+    return parsed_data
 
 def format_discord_report(matched_discord_ids):
-    """
-    [UPDATED] Formats the final Discord markdown block with blank fields and a Note line.
-    """
-    report_lines = [
-        "Event ID:",
-        "Length:",
-        "Host:",
-        "Co-host:",
-        "Attendees:",
-    ]
+    """Formats the final Discord markdown block with blank fields and a Note line."""
+    report_lines = ["Event ID:", "Length:", "Host:", "Co-host:", "Attendees:"]
     if matched_discord_ids:
         for user_id in matched_discord_ids:
             report_lines.append(f"- <@{user_id}> | V")
     else:
         report_lines.append("- (No attendees from the leaderboard were found in the database)")
-    
-    # Add a blank line for spacing and the final Note line
     report_lines.append("\nNote: ")
-    
     return "\n".join(report_lines)
 
 def set_watermark(file_path):
@@ -96,10 +86,10 @@ def set_watermark(file_path):
     try:
         with open(file_path, "rb") as image_file:
             encoded_string = base64.b64encode(image_file.read()).decode()
-        
         st.markdown(
             f"""
             <style>
+            /* Main Background and Watermark */
             .stApp {{ background-color: #0F1116; }}
             .stApp::before {{
                 content: ""; position: fixed; left: 0; top: 0; width: 100vw; height: 100vh;
@@ -107,13 +97,26 @@ def set_watermark(file_path):
                 background-position: center center; background-repeat: no-repeat;
                 background-size: 40% auto; opacity: 0.1; z-index: -1;
             }}
+            /* Headers */
             h1, h2, h3, h4, h5, h6 {{ color: #FFD700; }}
+            /* Buttons */
             .stButton>button {{ color: #0F1116; background-color: #FFD700; border-color: #FFD700; }}
+            /* File Uploader */
             [data-testid="stFileUploader"] label {{ color: #FFD700; border-color: #FFD700; }}
+            /* Expander */
             [data-testid="stExpander"] summary {{ color: #FFD700; }}
+            /* Info Box */
             [data-testid="stInfo"] {{ border-left-color: #FFD700; }}
+            /* Spinner */
             [data-testid="stSpinner"] > div {{ border-top-color: #FFD700; }}
+            /* Progress Bar */
             [data-testid="stProgressBar"] > div > div {{ background-image: linear-gradient(to right, #FFD700, #FFD700); }}
+
+            /* --- NEW: Radio Buttons --- */
+            [data-testid="stRadio"] label {{ color: #E0E0E0; }} /* Light text for readability */
+            [data-testid="stRadio"] label:hover {{ color: #FFD700 !important; }} /* Gold on hover */
+            [data-testid="stRadio"] input:checked + div {{ border-color: #FFD700 !important; }} /* Gold ring on selection */
+            [data-testid="stRadio"] input:checked + div::after {{ background-color: #FFD700 !important; }} /* Gold dot on selection */
             </style>
             """,
             unsafe_allow_html=True
@@ -121,14 +124,13 @@ def set_watermark(file_path):
     except FileNotFoundError:
         st.warning(f"Warning: Watermark file '{os.path.basename(file_path)}' not found. Please upload it to your GitHub repository.")
 
-# --- Page Configuration and Theme/Watermark Application ---
+# --- Page Configuration and Theme Application ---
 st.set_page_config(
     page_title="Blitzmarine Event-Logger",
     page_icon=LOGO_FILE,
     layout="wide",
     initial_sidebar_state="collapsed",
 )
-
 set_watermark(LOGO_FILE)
 
 # --- Streamlit GUI ---
@@ -147,8 +149,8 @@ except FileNotFoundError:
 if 'report_generated' not in st.session_state:
     st.session_state.report_generated = False
     st.session_state.discord_output = ""
-    st.session_state.unique_names = []
-    st.session_state.matched_ids = []
+    st.session_state.unique_players = []
+    st.session_state.players_with_scores = []
 
 uploaded_files = st.file_uploader(
     "Upload one or more leaderboard screenshots",
@@ -163,33 +165,48 @@ if uploaded_files:
             with cols[i % 8]:
                 st.image(uploaded_file, caption=f"Image {i+1}", width=150)
     
+    st.info("Please select the column that represents the players' scores.")
+    score_column_options = ("Second Column", "Third Column", "Fourth Column")
+    selected_column = st.radio(
+        "Which column is the score?",
+        score_column_options,
+        horizontal=True,
+    )
+    score_column_index = score_column_options.index(selected_column)
+
     st.write("---")
 
     if st.button("Generate Discord Report from All Screenshots"):
         if player_db_df.empty:
             st.warning("Cannot process because the player database file is missing, empty, or has incorrect columns.")
         else:
-            all_extracted_names = []
+            all_parsed_data = []
             with st.spinner(f"Step 1/3: Analyzing {len(uploaded_files)} screenshot(s)..."):
                 for uploaded_file in uploaded_files:
                     image = Image.open(uploaded_file)
                     ocr_text = extract_text_from_image(image)
                     if ocr_text:
-                        names_from_image = parse_leaderboard_text(ocr_text)
-                        all_extracted_names.extend(names_from_image)
-
-            if not all_extracted_names:
+                        data_from_image = parse_leaderboard_text(ocr_text)
+                        all_parsed_data.extend(data_from_image)
+            if not all_parsed_data:
                 st.error("OCR could not detect any text in any of the uploaded images.")
             else:
-                st.session_state.unique_names = list(dict.fromkeys(all_extracted_names))
-                with st.spinner("Step 2/3: Finding unique players and matching with database..."):
+                unique_players_dict = {player['name']: player for player in reversed(all_parsed_data)}
+                st.session_state.unique_players = list(unique_players_dict.values())
+                with st.spinner("Step 2/3: Finding players, matching, and extracting scores..."):
                     matched_ids = []
-                    for name in st.session_state.unique_names:
-                        discord_id = get_player_id_from_csv(name, player_db_df)
+                    players_with_scores = []
+                    for player in st.session_state.unique_players:
+                        discord_id = get_player_id_from_csv(player['name'], player_db_df)
                         if discord_id:
                             matched_ids.append(str(discord_id))
+                            try:
+                                score = player['stats'][score_column_index]
+                                players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': score})
+                            except IndexError:
+                                players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': 'N/A'})
                     st.session_state.matched_ids = list(dict.fromkeys(matched_ids))
-
+                    st.session_state.players_with_scores = players_with_scores
                     with st.spinner("Step 3/3: Building final report..."):
                         st.session_state.discord_output = format_discord_report(st.session_state.matched_ids)
                         st.session_state.report_generated = True
@@ -200,18 +217,18 @@ if st.session_state.report_generated:
     st.info("Click the copy icon in the top-right of the box below, then paste directly into Discord.")
     st.code(st.session_state.discord_output, language='markdown')
 
-    with st.expander("See processing details"):
-        st.write("**Unique Player Names Found (Combined & Deduplicated):**")
-        st.dataframe(pd.DataFrame(st.session_state.unique_names, columns=["Identified Roblox Usernames"]))
-        st.write("**Final Matched Discord User IDs:**")
-        if st.session_state.matched_ids:
-            st.dataframe(pd.DataFrame(st.session_state.matched_ids, columns=["Found Discord User IDs"]))
-        else:
-            st.warning("No players from any screenshot were found in the database.")
+    st.subheader("Player Scores")
+    if st.session_state.players_with_scores:
+        score_df = pd.DataFrame(st.session_state.players_with_scores)
+        st.dataframe(score_df, use_container_width=True)
+    else:
+        st.warning("No players from the leaderboard were found in the database to display scores.")
+
+    with st.expander("See raw processing details"):
+        st.write("**Unique Player Data Found (Name & Stats):**")
+        st.json(st.session_state.unique_players)
 
     if st.button("Start Over / Retry"):
-        st.session_state.report_generated = False
-        st.session_state.discord_output = ""
-        st.session_state.unique_names = []
-        st.session_state.matched_ids = []
+        for key in st.session_state.keys():
+            del st.session_state[key]
         st.rerun()

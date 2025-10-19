@@ -9,7 +9,8 @@ import base64
 
 # ==============================================================================
 # This is the definitive final version of the application.
-# It includes the CRITICAL FIX for the "View Full" image dialog error.
+# It is streamlined for its core purpose, with hideable full-sized images
+# and highly accurate score parsing.
 # ==============================================================================
 
 # --- Robust Path Configuration ---
@@ -123,9 +124,6 @@ set_watermark(LOGO_FILE)
 # --- Session State Init ---
 if 'report_generated' not in st.session_state:
     st.session_state.report_generated = False
-# --- NEW: Use an index for the dialog, not the file object ---
-if 'image_to_show_index' not in st.session_state:
-    st.session_state.image_to_show_index = -1
 
 # --- Main App ---
 st.title("Blitzmarine Event-Logger")
@@ -147,29 +145,10 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    # --- NEW: Stable Image Dialog Logic ---
-    if st.session_state.image_to_show_index != -1:
-        # Check if the index is still valid (in case files were removed)
-        if st.session_state.image_to_show_index < len(uploaded_files):
-            with st.dialog(f"Viewing Image {st.session_state.image_to_show_index + 1}"):
-                st.image(uploaded_files[st.session_state.image_to_show_index])
-                if st.button("Close", key="close_dialog"):
-                    st.session_state.image_to_show_index = -1
-                    st.rerun()
-        else:
-            # If index is invalid (e.g., user removed the file), just reset the state
-            st.session_state.image_to_show_index = -1
-            st.rerun()
-
+    # --- NEW: Display full-sized images in a collapsible expander ---
     with st.expander(f"View the {len(uploaded_files)} uploaded screenshot(s)..."):
-        cols = st.columns(min(len(uploaded_files), 8))
         for i, uploaded_file in enumerate(uploaded_files):
-            with cols[i % 8]:
-                st.image(uploaded_file, caption=f"Image {i+1}", width=150)
-                # This button now sets the index, which is stable
-                if st.button(f"View Full", key=f"view_{i}"):
-                    st.session_state.image_to_show_index = i
-                    st.rerun()
+            st.image(uploaded_file, caption=f"Screenshot {i+1}", use_column_width=True)
     
     st.info("Please select which of the numeric columns represents the players' scores.")
     score_column_options = ("First Column", "Second Column", "Third Column")
@@ -234,8 +213,6 @@ if st.session_state.report_generated:
     if st.button("Start Over / Retry"):
         # Reset all relevant states for a clean retry
         st.session_state.report_generated = False
-        st.session_state.image_to_show_index = -1
-        # Clear previous results
         st.session_state.pop('unique_players', None)
         st.session_state.pop('players_with_scores', None)
         st.session_state.pop('discord_output', None)

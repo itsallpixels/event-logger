@@ -89,7 +89,6 @@ def set_watermark(file_path):
         st.markdown(
             f"""
             <style>
-            /* Main Background and Watermark */
             .stApp {{ background-color: #0F1116; }}
             .stApp::before {{
                 content: ""; position: fixed; left: 0; top: 0; width: 100vw; height: 100vh;
@@ -97,26 +96,17 @@ def set_watermark(file_path):
                 background-position: center center; background-repeat: no-repeat;
                 background-size: 40% auto; opacity: 0.1; z-index: -1;
             }}
-            /* Headers */
             h1, h2, h3, h4, h5, h6 {{ color: #FFD700; }}
-            /* Buttons */
             .stButton>button {{ color: #0F1116; background-color: #FFD700; border-color: #FFD700; }}
-            /* File Uploader */
             [data-testid="stFileUploader"] label {{ color: #FFD700; border-color: #FFD700; }}
-            /* Expander */
             [data-testid="stExpander"] summary {{ color: #FFD700; }}
-            /* Info Box */
             [data-testid="stInfo"] {{ border-left-color: #FFD700; }}
-            /* Spinner */
             [data-testid="stSpinner"] > div {{ border-top-color: #FFD700; }}
-            /* Progress Bar */
             [data-testid="stProgressBar"] > div > div {{ background-image: linear-gradient(to right, #FFD700, #FFD700); }}
-
-            /* --- NEW: Radio Buttons --- */
-            [data-testid="stRadio"] label {{ color: #E0E0E0; }} /* Light text for readability */
-            [data-testid="stRadio"] label:hover {{ color: #FFD700 !important; }} /* Gold on hover */
-            [data-testid="stRadio"] input:checked + div {{ border-color: #FFD700 !important; }} /* Gold ring on selection */
-            [data-testid="stRadio"] input:checked + div::after {{ background-color: #FFD700 !important; }} /* Gold dot on selection */
+            [data-testid="stRadio"] label {{ color: #E0E0E0; }}
+            [data-testid="stRadio"] label:hover {{ color: #FFD700 !important; }}
+            [data-testid="stRadio"] input:checked + div {{ border-color: #FFD700 !important; }}
+            [data-testid="stRadio"] input:checked + div::after {{ background-color: #FFD700 !important; }}
             </style>
             """,
             unsafe_allow_html=True

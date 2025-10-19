@@ -8,9 +8,9 @@ from difflib import SequenceMatcher
 import base64
 
 # ==============================================================================
-# This is the final version of the application.
-# It includes score extraction, a full-page watermark logo, a complete custom 
-# theme, multi-file support, and a retry mechanism.
+# This is the definitive final version of the application.
+# It is streamlined for its core purpose, with interactive thumbnails
+# and highly accurate score parsing.
 # ==============================================================================
 
 # --- Robust Path Configuration ---
@@ -45,11 +45,10 @@ def extract_text_from_image(image):
         text = pytesseract.image_to_string(image, config=custom_config)
         return text
     except Exception as e:
-        st.error(f"An error occurred during OCR processing on the server: {e}")
-        return None
+        st.error(f"An error occurred during OCR processing: {e}"); return None
 
 def parse_leaderboard_text(text):
-    """[UPGRADED] Parses raw OCR text to extract player names AND all associated numeric columns."""
+    """[UPGRADED] Parses raw OCR text with improved accuracy for scores."""
     parsed_data = []
     lines = text.strip().split('\n')
     try:
@@ -58,16 +57,21 @@ def parse_leaderboard_text(text):
     except StopIteration:
         relevant_lines = lines
     for line in relevant_lines:
-        numbers_on_line = [int(n.replace(',', '')) for n in re.findall(r'\b\d{1,3}(?:,\d{3})*|\d+\b', line)]
-        if not numbers_on_line: continue
         name_candidates = []
         for word in line.split():
             cleaned_word = re.sub(r'[^\w-]', '', word).strip('-_')
-            if cleaned_word and not cleaned_word.isdigit(): name_candidates.append(cleaned_word)
+            if cleaned_word and not cleaned_word.isdigit():
+                name_candidates.append(cleaned_word)
         if not name_candidates: continue
         potential_name = max(name_candidates, key=len)
-        if len(potential_name) > 2 and potential_name.lower() not in ['japan', 'usa', 'team']:
-            parsed_data.append({'name': potential_name, 'stats': numbers_on_line})
+        try:
+            name_end_index = line.rfind(potential_name) + len(potential_name)
+            stats_part = line[name_end_index:]
+            numbers_on_line = [int(n.replace(',', '')) for n in re.findall(r'\b\d{1,3}(?:,\d{3})*|\d+\b', stats_part)]
+            if numbers_on_line and len(potential_name) > 2 and potential_name.lower() not in ['japan', 'usa', 'team']:
+                parsed_data.append({'name': potential_name, 'stats': numbers_on_line})
+        except (ValueError, IndexError):
+            continue
     return parsed_data
 
 def format_discord_report(matched_discord_ids):
@@ -114,16 +118,19 @@ def set_watermark(file_path):
     except FileNotFoundError:
         st.warning(f"Warning: Watermark file '{os.path.basename(file_path)}' not found. Please upload it to your GitHub repository.")
 
-# --- Page Configuration and Theme Application ---
-st.set_page_config(
-    page_title="Blitzmarine Event-Logger",
-    page_icon=LOGO_FILE,
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
+# --- Page Config ---
+st.set_page_config(page_title="Blitzmarine Event-Logger", page_icon=LOGO_FILE, layout="wide")
 set_watermark(LOGO_FILE)
 
-# --- Streamlit GUI ---
+# --- Session State Init ---
+if 'report_generated' not in st.session_state:
+    st.session_state.report_generated = False
+    st.session_state.discord_output = ""
+    st.session_state.unique_players = []
+    st.session_state.players_with_scores = []
+    st.session_state.show_image_index = -1
+
+# --- Main App ---
 st.title("Blitzmarine Event-Logger")
 st.write("Upload **one or more Roblox Leaderboard screenshots**. The app will combine the results, find unique players, and generate a single formatted event report.")
 
@@ -135,12 +142,6 @@ try:
 except FileNotFoundError:
     st.error(f"Error: The database file '{os.path.basename(DATABASE_FILE)}' was not found in the GitHub repository. Please upload it.")
     player_db_df = pd.DataFrame()
-
-if 'report_generated' not in st.session_state:
-    st.session_state.report_generated = False
-    st.session_state.discord_output = ""
-    st.session_state.unique_players = []
-    st.session_state.players_with_scores = []
 
 uploaded_files = st.file_uploader(
     "Upload one or more leaderboard screenshots",
@@ -154,9 +155,19 @@ if uploaded_files:
         for i, uploaded_file in enumerate(uploaded_files):
             with cols[i % 8]:
                 st.image(uploaded_file, caption=f"Image {i+1}", width=150)
+                if st.button(f"View Full", key=f"view_{i}"):
+                    st.session_state.show_image_index = i
     
-    st.info("Please select the column that represents the players' scores.")
-    score_column_options = ("Second Column", "Third Column", "Fourth Column")
+    if st.session_state.show_image_index != -1:
+        with st.dialog(f"Viewing Image {st.session_state.show_image_index + 1}"):
+            st.image(uploaded_files[st.session_state.show_image_index])
+            if st.button("Close", key="close_dialog"):
+                st.session_state.show_image_index = -1
+                st.rerun()
+
+    st.info("Please select which of the numeric columns represents the players' scores.")
+    # --- UPDATED: Radio button labels ---
+    score_column_options = ("First Column", "Second Column", "Third Column")
     selected_column = st.radio(
         "Which column is the score?",
         score_column_options,
@@ -165,7 +176,7 @@ if uploaded_files:
     score_column_index = score_column_options.index(selected_column)
 
     st.write("---")
-
+    
     if st.button("Generate Discord Report from All Screenshots"):
         if player_db_df.empty:
             st.warning("Cannot process because the player database file is missing, empty, or has incorrect columns.")
@@ -219,6 +230,7 @@ if st.session_state.report_generated:
         st.json(st.session_state.unique_players)
 
     if st.button("Start Over / Retry"):
-        for key in st.session_state.keys():
-            del st.session_state[key]
+        for key in list(st.session_state.keys()):
+            if key != 'show_image_index': # Don't clear the dialog state
+                del st.session_state[key]
         st.rerun()

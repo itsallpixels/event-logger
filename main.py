@@ -210,4 +210,5 @@ if st.session_state.report_generated:
         st.session_state.discord_output = ""
         st.session_state.unique_names = []
         st.session_state.matched_ids = []
-        st.rerun()```
+        st.rerun()
+

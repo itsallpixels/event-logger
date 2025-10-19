@@ -9,7 +9,7 @@ import base64
 
 # ==============================================================================
 # This is the definitive final version of the application.
-# It includes the fix for the interactive image dialog.
+# It includes the CRITICAL FIX for the "View Full" image dialog error.
 # ==============================================================================
 
 # --- Robust Path Configuration ---
@@ -59,8 +59,7 @@ def parse_leaderboard_text(text):
         name_candidates = []
         for word in line.split():
             cleaned_word = re.sub(r'[^\w-]', '', word).strip('-_')
-            if cleaned_word and not cleaned_word.isdigit():
-                name_candidates.append(cleaned_word)
+            if cleaned_word and not cleaned_word.isdigit(): name_candidates.append(cleaned_word)
         if not name_candidates: continue
         potential_name = max(name_candidates, key=len)
         try:
@@ -124,8 +123,9 @@ set_watermark(LOGO_FILE)
 # --- Session State Init ---
 if 'report_generated' not in st.session_state:
     st.session_state.report_generated = False
-if 'show_image' not in st.session_state:
-    st.session_state.show_image = None
+# --- NEW: Use an index for the dialog, not the file object ---
+if 'image_to_show_index' not in st.session_state:
+    st.session_state.image_to_show_index = -1
 
 # --- Main App ---
 st.title("Blitzmarine Event-Logger")
@@ -140,15 +140,6 @@ except FileNotFoundError:
     st.error(f"Error: The database file '{os.path.basename(DATABASE_FILE)}' was not found in the GitHub repository. Please upload it.")
     player_db_df = pd.DataFrame()
 
-# --- NEW: Image Dialog Logic ---
-# This dialog will appear if session_state.show_image is set to an image object
-if st.session_state.show_image:
-    with st.dialog("Viewing Full Screenshot"):
-        st.image(st.session_state.show_image)
-        if st.button("Close", key="close_dialog"):
-            st.session_state.show_image = None
-            st.rerun()
-
 uploaded_files = st.file_uploader(
     "Upload one or more leaderboard screenshots",
     type=["png", "jpg", "jpeg"],
@@ -156,25 +147,38 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
+    # --- NEW: Stable Image Dialog Logic ---
+    if st.session_state.image_to_show_index != -1:
+        # Check if the index is still valid (in case files were removed)
+        if st.session_state.image_to_show_index < len(uploaded_files):
+            with st.dialog(f"Viewing Image {st.session_state.image_to_show_index + 1}"):
+                st.image(uploaded_files[st.session_state.image_to_show_index])
+                if st.button("Close", key="close_dialog"):
+                    st.session_state.image_to_show_index = -1
+                    st.rerun()
+        else:
+            # If index is invalid (e.g., user removed the file), just reset the state
+            st.session_state.image_to_show_index = -1
+            st.rerun()
+
     with st.expander(f"View the {len(uploaded_files)} uploaded screenshot(s)..."):
         cols = st.columns(min(len(uploaded_files), 8))
         for i, uploaded_file in enumerate(uploaded_files):
             with cols[i % 8]:
                 st.image(uploaded_file, caption=f"Image {i+1}", width=150)
-                # This button sets the session state to the image object itself
+                # This button now sets the index, which is stable
                 if st.button(f"View Full", key=f"view_{i}"):
-                    st.session_state.show_image = uploaded_file
+                    st.session_state.image_to_show_index = i
                     st.rerun()
     
     st.info("Please select which of the numeric columns represents the players' scores.")
     score_column_options = ("First Column", "Second Column", "Third Column")
     selected_column = st.radio("Which column is the score?", score_column_options, horizontal=True)
     score_column_index = score_column_options.index(selected_column)
-
     st.write("---")
     
     if st.button("Generate Discord Report from All Screenshots"):
-        # When generating a report, store results in session_state
+        # Store results in session_state
         all_parsed_data = []
         with st.spinner(f"Step 1/3: Analyzing {len(uploaded_files)} screenshot(s)..."):
             for uploaded_file in uploaded_files:
@@ -207,7 +211,7 @@ if uploaded_files:
                 with st.spinner("Step 3/3: Building final report..."):
                     st.session_state.discord_output = format_discord_report(st.session_state.matched_ids)
                     st.session_state.report_generated = True
-                    st.rerun() # Rerun once to display the final report block cleanly
+                    st.rerun()
 
 # This block displays the results if a report has been generated
 if st.session_state.report_generated:
@@ -228,7 +232,12 @@ if st.session_state.report_generated:
         st.json(st.session_state.get('unique_players', []))
 
     if st.button("Start Over / Retry"):
-        # Simplified reset logic
+        # Reset all relevant states for a clean retry
         st.session_state.report_generated = False
-        st.session_state.show_image = None # Also reset the dialog state
+        st.session_state.image_to_show_index = -1
+        # Clear previous results
+        st.session_state.pop('unique_players', None)
+        st.session_state.pop('players_with_scores', None)
+        st.session_state.pop('discord_output', None)
+        st.session_state.pop('matched_ids', None)
         st.rerun()

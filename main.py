@@ -8,44 +8,47 @@ from difflib import SequenceMatcher
 
 # ==============================================================================
 # This app is designed for deployment on Streamlit Community Cloud.
-# It uses Fuzzy String Matching for superior accuracy against OCR errors.
+# It uses a HYBRID matching system for maximum accuracy.
+# 1. A 'contains' search for clan tags/prefixes.
+# 2. A 'fuzzy' search fallback for OCR misspellings.
 # ==============================================================================
 
 DATABASE_FILE = "players.csv"
-# The similarity threshold for a fuzzy match (0.8 = 80% similar)
-# This is tunable. Higher is stricter, lower is more lenient.
-MATCH_THRESHOLD = 0.8
+# The similarity threshold for the fuzzy match fallback (0.8 = 80%)
+FUZZY_MATCH_THRESHOLD = 0.8
 
 # --- Database and OCR Functions ---
 
 def get_player_id_from_csv(username, db_dataframe):
     """
-    [UPGRADED] Fetches a player's Discord User ID using Fuzzy String Matching.
-    This finds the best match in the database and accepts it if the similarity
-    is above the MATCH_THRESHOLD.
+    [UPGRADED] Fetches a player's Discord User ID using a robust hybrid approach.
     """
     if db_dataframe.empty:
         return None
-    
+
+    # Step 1: High-confidence 'contains' search (perfect for clan tags/prefixes)
+    # This is fast and accurate for cases like 'Wassoi' in 'Jolan_Wassoi'.
+    contains_result = db_dataframe[db_dataframe['roblox_username'].str.lower().str.contains(username.lower(), na=False)]
+    if not contains_result.empty:
+        # If we find one or more matches, we take the first one.
+        return contains_result['discord_userid'].iloc[0]
+
+    # Step 2: Fuzzy search fallback (for misspellings like 'Kyotaka' vs 'kiyotaka')
+    # This only runs if the 'contains' search failed.
     best_match_score = 0.0
     best_match_id = None
     
-    # Iterate through every player in the database to find the best possible match
     for index, row in db_dataframe.iterrows():
         db_username = row['roblox_username']
-        
-        # Calculate the similarity ratio between the OCR'd name and the database name
         similarity = SequenceMatcher(None, username.lower(), db_username.lower()).ratio()
         
         if similarity > best_match_score:
             best_match_score = similarity
             best_match_id = row['discord_userid']
             
-    # If the best match we found is good enough, return the ID
-    if best_match_score >= MATCH_THRESHOLD:
+    if best_match_score >= FUZZY_MATCH_THRESHOLD:
         return best_match_id
         
-    # Otherwise, we conclude there was no confident match
     return None
 
 def extract_text_from_image(image):
@@ -65,10 +68,11 @@ def parse_leaderboard_text(text):
     player_names = []
     lines = text.strip().split('\n')
     try:
+        # For full screenshots
         start_index = next(i for i, line in enumerate(lines) if "leaderboard" in line.lower())
         relevant_lines = lines[start_index + 1:]
     except StopIteration:
-        # For cropped images that don't have the word "leaderboard"
+        # For cropped screenshots without the "leaderboard" title
         relevant_lines = lines
 
     for line in relevant_lines:

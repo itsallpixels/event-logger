@@ -71,22 +71,24 @@ def parse_leaderboard_text(text):
 
 def format_discord_report(matched_discord_ids):
     """
-    [UPDATED] Formats the list of matched Discord User IDs into a Discord markdown block.
-    Appends ' | V' to each attendee line.
+    [UPDATED] Formats the final Discord markdown block with blank fields and a Note line.
     """
     report_lines = [
-        "Event ID: [fill this in]",
-        "Length: [fill this in]",
-        "Host: [fill this in]",
-        "Co-host: [fill this in]",
+        "Event ID:",
+        "Length:",
+        "Host:",
+        "Co-host:",
         "Attendees:",
     ]
     if matched_discord_ids:
         for user_id in matched_discord_ids:
-            # This is the updated line with the new formatting
             report_lines.append(f"- <@{user_id}> | V")
     else:
         report_lines.append("- (No attendees from the leaderboard were found in the database)")
+    
+    # Add a blank line for spacing and the final Note line
+    report_lines.append("\nNote: ")
+    
     return "\n".join(report_lines)
 
 def set_watermark(file_path):

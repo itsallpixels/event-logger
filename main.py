@@ -38,25 +38,15 @@ def get_player_id_from_csv(username, db_dataframe):
     if best_match_score >= FUZZY_MATCH_THRESHOLD: return best_match_id
     return None
 
-# --- MODIFIED FUNCTION ---
 def extract_text_from_image(image):
     """
     [UPGRADED v2] Extracts text from an image using Pytesseract OCR
     after applying preprocessing steps for much higher accuracy.
     """
     try:
-        # 1. Convert to grayscale: Simplifies the image to one channel.
         processed_image = image.convert('L')
-
-        # 2. Invert colors if text is lighter than background (common in games).
         processed_image = ImageOps.invert(processed_image)
-
-        # 3. Apply a binary threshold: Converts image to pure black and white.
-        # This is the most critical step for removing background noise and artifacts.
-        # The threshold value (e.g., 128) can be tuned if needed.
         processed_image = processed_image.point(lambda x: 0 if x < 128 else 255, '1')
-
-        # 4. Perform OCR on the clean, preprocessed image.
         custom_config = r'--oem 3 --psm 6'
         text = pytesseract.image_to_string(processed_image, config=custom_config)
         return text
@@ -182,14 +172,25 @@ if uploaded_files:
                 st.session_state.show_image_index = -1
                 st.rerun()
 
-    st.info("Please select which of the numeric columns represents the players' scores.")
-    score_column_options = ("First Column", "Second Column", "Third Column")
-    selected_column = st.radio(
+    st.info("Please select which numeric column represents the players' scores.")
+
+    # --- KEY CHANGE STARTS HERE ---
+    # We now provide a "Last Column" option which is more robust.
+    score_column_map = {
+        "First Column": 0,
+        "Second Column": 1,
+        "Last Column": -1  # Use negative index to always get the last element
+    }
+    # Get the user's selection from the radio button
+    selected_column_label = st.radio(
         "Which column is the score?",
-        score_column_options,
+        list(score_column_map.keys()), # The options are the keys from our map
         horizontal=True,
+        index=2 # Default selection to "Last Column"
     )
-    score_column_index = score_column_options.index(selected_column)
+    # Translate the user's choice (e.g., "Last Column") into the correct index (e.g., -1)
+    score_column_index = score_column_map[selected_column_label]
+    # --- KEY CHANGE ENDS HERE ---
 
     st.write("---")
 
@@ -218,6 +219,7 @@ if uploaded_files:
                         if discord_id:
                             matched_ids.append(str(discord_id))
                             try:
+                                # This line now works robustly with the new index (e.g., -1 for last)
                                 score = player['stats'][score_column_index]
                                 players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': score})
                             except IndexError:

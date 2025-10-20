@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from PIL import Image, ImageOps, ImageEnhance
+from PIL import Image, ImageOps
 import pytesseract
 import os
 import re
@@ -18,8 +18,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_FILE = os.path.join(SCRIPT_DIR, "players.csv")
 LOGO_FILE = os.path.join(SCRIPT_DIR, "logo.png")
 
-# Using a slightly more lenient threshold to work better with the advanced OCR
-FUZZY_MATCH_THRESHOLD = 0.75
+FUZZY_MATCH_THRESHOLD = 0.8
 
 # --- Core Functions ---
 
@@ -39,16 +38,13 @@ def get_player_id_from_csv(username, db_dataframe):
     if best_match_score >= FUZZY_MATCH_THRESHOLD: return best_match_id
     return None
 
-# --- USING THE ADVANCED IMAGE PREPROCESSING FOR BEST SCORE DETECTION ---
 def extract_text_from_image(image):
     """
-    [UPGRADED] Extracts text from an image using Pytesseract OCR
-    after applying an enhanced preprocessing pipeline for maximum accuracy.
+    [UPGRADED v2] Extracts text from an image using Pytesseract OCR
+    after applying preprocessing steps for much higher accuracy.
     """
     try:
         processed_image = image.convert('L')
-        enhancer = ImageEnhance.Contrast(processed_image)
-        processed_image = enhancer.enhance(2)
         processed_image = ImageOps.invert(processed_image)
         processed_image = processed_image.point(lambda x: 0 if x < 128 else 255, '1')
         custom_config = r'--oem 3 --psm 6'
@@ -57,9 +53,8 @@ def extract_text_from_image(image):
     except Exception as e:
         st.error(f"An error occurred during OCR processing: {e}"); return None
 
-# --- USING THE PREFERRED "LONGEST WORD" METHOD FOR BEST NAME DETECTION ---
 def parse_leaderboard_text(text):
-    """[UPGRADED] Parses raw OCR text with the 'longest word' method for names."""
+    """[UPGRADED] Parses raw OCR text with improved accuracy by pre-cleaning the stats string."""
     parsed_data = []
     lines = text.strip().split('\n')
     try:
@@ -78,7 +73,8 @@ def parse_leaderboard_text(text):
         try:
             name_end_index = line.rfind(potential_name) + len(potential_name)
             stats_part = line[name_end_index:]
-            numbers_on_line = [int(n.replace(',', '')) for n in re.findall(r'\b\d{1,3}(?:,\d{3})*|\d+\b', stats_part)]
+            cleaned_stats_part = re.sub(r'[^\d,\s]', '', stats_part)
+            numbers_on_line = [int(n.replace(',', '')) for n in re.findall(r'\b\d{1,3}(?:,\d{3})*|\d+\b', cleaned_stats_part)]
             if numbers_on_line and len(potential_name) > 2 and potential_name.lower() not in ['japan', 'usa', 'team']:
                 parsed_data.append({'name': potential_name, 'stats': numbers_on_line})
         except (ValueError, IndexError):
@@ -168,7 +164,7 @@ if uploaded_files:
                 st.image(uploaded_file, caption=f"Image {i+1}", width=150)
                 if st.button(f"View Full", key=f"view_{i}"):
                     st.session_state.show_image_index = i
-    
+
     if st.session_state.show_image_index != -1:
         with st.dialog(f"Viewing Image {st.session_state.show_image_index + 1}"):
             st.image(uploaded_files[st.session_state.show_image_index])
@@ -176,24 +172,28 @@ if uploaded_files:
                 st.session_state.show_image_index = -1
                 st.rerun()
 
-    st.info("Please select which of the numeric columns represents the players' scores.")
-    
-    # --- USING THE ROBUST "LAST COLUMN" INDEXING LOGIC ---
+    st.info("Please select which numeric column represents the players' scores.")
+
+    # --- KEY CHANGE STARTS HERE ---
+    # We now provide a "Last Column" option which is more robust.
     score_column_map = {
         "First Column": 0,
         "Second Column": 1,
-        "Last Column": -1 
+        "Last Column": -1  # Use negative index to always get the last element
     }
+    # Get the user's selection from the radio button
     selected_column_label = st.radio(
         "Which column is the score?",
-        list(score_column_map.keys()),
+        list(score_column_map.keys()), # The options are the keys from our map
         horizontal=True,
-        index=2
+        index=2 # Default selection to "Last Column"
     )
+    # Translate the user's choice (e.g., "Last Column") into the correct index (e.g., -1)
     score_column_index = score_column_map[selected_column_label]
+    # --- KEY CHANGE ENDS HERE ---
 
     st.write("---")
-    
+
     if st.button("Generate Discord Report from All Screenshots"):
         if player_db_df.empty:
             st.warning("Cannot process because the player database file is missing, empty, or has incorrect columns.")
@@ -219,6 +219,7 @@ if uploaded_files:
                         if discord_id:
                             matched_ids.append(str(discord_id))
                             try:
+                                # This line now works robustly with the new index (e.g., -1 for last)
                                 score = player['stats'][score_column_index]
                                 players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': score})
                             except IndexError:
@@ -251,3 +252,4 @@ if st.session_state.report_generated:
             if key != 'show_image_index': # Don't clear the dialog state
                 del st.session_state[key]
         st.rerun()
+

@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from PIL import Image
+from PIL import Image, ImageOps
 import pytesseract
 import os
 import re
@@ -9,8 +9,8 @@ import base64
 
 # ==============================================================================
 # This is the definitive final version of the application.
-# It is streamlined for ATTENDANCE LOGGING ONLY and displays uploaded
-# images at full resolution in a hideable section.
+# It is streamlined for ATTENDANCE LOGGING and uses Image Preprocessing
+# for highly accurate name detection.
 # ==============================================================================
 
 # --- Robust Path Configuration ---
@@ -38,11 +38,26 @@ def get_player_id_from_csv(username, db_dataframe):
     if best_match_score >= FUZZY_MATCH_THRESHOLD: return best_match_id
     return None
 
+# --- KEY CHANGE: Re-introducing the advanced image preprocessing function ---
 def extract_text_from_image(image):
-    """Extracts text from an image using Pytesseract OCR."""
+    """
+    [UPGRADED] Extracts text from an image using Pytesseract OCR
+    after applying preprocessing steps for much higher accuracy.
+    """
     try:
+        # 1. Convert to grayscale: Simplifies the image.
+        processed_image = image.convert('L')
+        
+        # 2. Invert colors: Tesseract prefers dark text on a light background.
+        processed_image = ImageOps.invert(processed_image)
+        
+        # 3. Apply a binary threshold: Converts the image to pure black and white,
+        #    removing all background noise, textures, and watermarks.
+        processed_image = processed_image.point(lambda x: 0 if x < 128 else 255, '1')
+        
+        # 4. Perform OCR on the clean image.
         custom_config = r'--oem 3 --psm 6'
-        text = pytesseract.image_to_string(image, config=custom_config)
+        text = pytesseract.image_to_string(processed_image, config=custom_config)
         return text
     except Exception as e:
         st.error(f"An error occurred during OCR processing: {e}"); return None
@@ -142,12 +157,9 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    # --- KEY CHANGE: Replaced thumbnail grid with a hideable full-resolution viewer ---
     with st.expander(f"View the {len(uploaded_files)} uploaded screenshot(s)..."):
         for i, uploaded_file in enumerate(uploaded_files):
-            # Displaying the image without a width constraint renders it at original resolution
             st.image(uploaded_file, caption=f"Image {i+1}")
-            # Add a visual separator between images if there are more than one
             if i < len(uploaded_files) - 1:
                 st.divider()
     
@@ -193,7 +205,6 @@ if st.session_state.report_generated:
         st.json(st.session_state.unique_players)
 
     if st.button("Start Over / Retry"):
-        # Clear all items from session state to reset the app
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()

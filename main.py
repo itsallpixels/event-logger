@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from PIL import Image
+from PIL import Image, ImageOps
 import pytesseract
 import os
 import re
@@ -38,18 +38,33 @@ def get_player_id_from_csv(username, db_dataframe):
     if best_match_score >= FUZZY_MATCH_THRESHOLD: return best_match_id
     return None
 
+# --- MODIFIED FUNCTION ---
 def extract_text_from_image(image):
-    """Extracts text from an image using Pytesseract OCR."""
+    """
+    [UPGRADED v2] Extracts text from an image using Pytesseract OCR
+    after applying preprocessing steps for much higher accuracy.
+    """
     try:
+        # 1. Convert to grayscale: Simplifies the image to one channel.
+        processed_image = image.convert('L')
+
+        # 2. Invert colors if text is lighter than background (common in games).
+        processed_image = ImageOps.invert(processed_image)
+
+        # 3. Apply a binary threshold: Converts image to pure black and white.
+        # This is the most critical step for removing background noise and artifacts.
+        # The threshold value (e.g., 128) can be tuned if needed.
+        processed_image = processed_image.point(lambda x: 0 if x < 128 else 255, '1')
+
+        # 4. Perform OCR on the clean, preprocessed image.
         custom_config = r'--oem 3 --psm 6'
-        text = pytesseract.image_to_string(image, config=custom_config)
+        text = pytesseract.image_to_string(processed_image, config=custom_config)
         return text
     except Exception as e:
         st.error(f"An error occurred during OCR processing: {e}"); return None
 
-# --- MODIFIED FUNCTION ---
 def parse_leaderboard_text(text):
-    """[UPGRADED v2] Parses raw OCR text with improved accuracy by pre-cleaning the stats string."""
+    """[UPGRADED] Parses raw OCR text with improved accuracy by pre-cleaning the stats string."""
     parsed_data = []
     lines = text.strip().split('\n')
     try:
@@ -68,16 +83,8 @@ def parse_leaderboard_text(text):
         try:
             name_end_index = line.rfind(potential_name) + len(potential_name)
             stats_part = line[name_end_index:]
-
-            # --- KEY IMPROVEMENT STARTS HERE ---
-            # 1. Clean the stats string: Remove any character that isn't a digit, comma, or space.
-            # This is crucial for eliminating garbage characters from icons that interfere with number recognition.
             cleaned_stats_part = re.sub(r'[^\d,\s]', '', stats_part)
-
-            # 2. Find numbers in the NEW, CLEANED string.
             numbers_on_line = [int(n.replace(',', '')) for n in re.findall(r'\b\d{1,3}(?:,\d{3})*|\d+\b', cleaned_stats_part)]
-            # --- KEY IMPROVEMENT ENDS HERE ---
-
             if numbers_on_line and len(potential_name) > 2 and potential_name.lower() not in ['japan', 'usa', 'team']:
                 parsed_data.append({'name': potential_name, 'stats': numbers_on_line})
         except (ValueError, IndexError):

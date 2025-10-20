@@ -1,17 +1,16 @@
 import streamlit as st
 import pandas as pd
-from PIL import Image
+from PIL import Image, ImageOps
 import pytesseract
 import os
 import re
 from difflib import SequenceMatcher
 import base64
-import cv2  # Importing OpenCV
-import numpy as np # OpenCV requires numpy
 
 # ==============================================================================
 # This is the definitive final version of the application.
-# It uses OpenCV for superior image processing and a reliable parsing engine.
+# It is streamlined for its core purpose, with interactive thumbnails
+# and highly accurate score parsing.
 # ==============================================================================
 
 # --- Robust Path Configuration ---
@@ -19,7 +18,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_FILE = os.path.join(SCRIPT_DIR, "players.csv")
 LOGO_FILE = os.path.join(SCRIPT_DIR, "logo.png")
 
-FUZZY_MATCH_THRESHOLD = 0.75
+FUZZY_MATCH_THRESHOLD = 0.8
 
 # --- Core Functions ---
 
@@ -39,37 +38,23 @@ def get_player_id_from_csv(username, db_dataframe):
     if best_match_score >= FUZZY_MATCH_THRESHOLD: return best_match_id
     return None
 
-# --- UPGRADED WITH OPENCV FOR IMAGE PROCESSING ---
-def extract_text_from_image(pil_image):
+def extract_text_from_image(image):
     """
-    [UPGRADED w/ OpenCV] Extracts text using Tesseract after applying a
-    powerful OpenCV preprocessing pipeline for maximum accuracy.
+    [UPGRADED v2] Extracts text from an image using Pytesseract OCR
+    after applying preprocessing steps for much higher accuracy.
     """
     try:
-        # 1. Convert PIL Image to OpenCV format (NumPy array)
-        open_cv_image = np.array(pil_image)
-        # Convert RGB to BGR (OpenCV's default color order)
-        open_cv_image = open_cv_image[:, :, ::-1].copy()
-
-        # 2. Convert to Grayscale
-        gray_image = cv2.cvtColor(open_cv_image, cv2.COLOR_BGR2GRAY)
-
-        # 3. Apply a threshold. Otsu's method automatically finds the best
-        #    threshold value to separate text from background. This is much
-        #    more robust than a fixed value. We also invert it to get
-        #    black text on a white background, which Tesseract prefers.
-        _, processed_image = cv2.threshold(gray_image, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
-        # 4. Perform OCR on the ultra-clean image
+        processed_image = image.convert('L')
+        processed_image = ImageOps.invert(processed_image)
+        processed_image = processed_image.point(lambda x: 0 if x < 128 else 255, '1')
         custom_config = r'--oem 3 --psm 6'
         text = pytesseract.image_to_string(processed_image, config=custom_config)
         return text
     except Exception as e:
         st.error(f"An error occurred during OCR processing: {e}"); return None
 
-
 def parse_leaderboard_text(text):
-    """[UPGRADED] Parses raw OCR text with the 'longest word' method for names."""
+    """[UPGRADED] Parses raw OCR text with improved accuracy by pre-cleaning the stats string."""
     parsed_data = []
     lines = text.strip().split('\n')
     try:
@@ -88,7 +73,8 @@ def parse_leaderboard_text(text):
         try:
             name_end_index = line.rfind(potential_name) + len(potential_name)
             stats_part = line[name_end_index:]
-            numbers_on_line = [int(n.replace(',', '')) for n in re.findall(r'\b\d{1,3}(?:,\d{3})*|\d+\b', stats_part)]
+            cleaned_stats_part = re.sub(r'[^\d,\s]', '', stats_part)
+            numbers_on_line = [int(n.replace(',', '')) for n in re.findall(r'\b\d{1,3}(?:,\d{3})*|\d+\b', cleaned_stats_part)]
             if numbers_on_line and len(potential_name) > 2 and potential_name.lower() not in ['japan', 'usa', 'team']:
                 parsed_data.append({'name': potential_name, 'stats': numbers_on_line})
         except (ValueError, IndexError):
@@ -178,7 +164,7 @@ if uploaded_files:
                 st.image(uploaded_file, caption=f"Image {i+1}", width=150)
                 if st.button(f"View Full", key=f"view_{i}"):
                     st.session_state.show_image_index = i
-    
+
     if st.session_state.show_image_index != -1:
         with st.dialog(f"Viewing Image {st.session_state.show_image_index + 1}"):
             st.image(uploaded_files[st.session_state.show_image_index])
@@ -186,23 +172,28 @@ if uploaded_files:
                 st.session_state.show_image_index = -1
                 st.rerun()
 
-    st.info("Please select which of the numeric columns represents the players' scores.")
-    
+    st.info("Please select which numeric column represents the players' scores.")
+
+    # --- KEY CHANGE STARTS HERE ---
+    # We now provide a "Last Column" option which is more robust.
     score_column_map = {
         "First Column": 0,
         "Second Column": 1,
-        "Last Column": -1 
+        "Last Column": -1  # Use negative index to always get the last element
     }
+    # Get the user's selection from the radio button
     selected_column_label = st.radio(
         "Which column is the score?",
-        list(score_column_map.keys()),
+        list(score_column_map.keys()), # The options are the keys from our map
         horizontal=True,
-        index=2
+        index=2 # Default selection to "Last Column"
     )
+    # Translate the user's choice (e.g., "Last Column") into the correct index (e.g., -1)
     score_column_index = score_column_map[selected_column_label]
+    # --- KEY CHANGE ENDS HERE ---
 
     st.write("---")
-    
+
     if st.button("Generate Discord Report from All Screenshots"):
         if player_db_df.empty:
             st.warning("Cannot process because the player database file is missing, empty, or has incorrect columns.")
@@ -228,6 +219,7 @@ if uploaded_files:
                         if discord_id:
                             matched_ids.append(str(discord_id))
                             try:
+                                # This line now works robustly with the new index (e.g., -1 for last)
                                 score = player['stats'][score_column_index]
                                 players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': score})
                             except IndexError:
@@ -246,7 +238,7 @@ if st.session_state.report_generated:
 
     st.subheader("Player Scores")
     if st.session_state.players_with_scores:
-        score__df = pd.DataFrame(st.session_state.players_with_scores)
+        score_df = pd.DataFrame(st.session_state.players_with_scores)
         st.dataframe(score_df, use_container_width=True)
     else:
         st.warning("No players from the leaderboard were found in the database to display scores.")
@@ -260,3 +252,4 @@ if st.session_state.report_generated:
             if key != 'show_image_index': # Don't clear the dialog state
                 del st.session_state[key]
         st.rerun()
+

@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from PIL import Image, ImageOps, ImageEnhance
+from PIL import Image
 import pytesseract
 import os
 import re
@@ -18,9 +18,9 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_FILE = os.path.join(SCRIPT_DIR, "players.csv")
 LOGO_FILE = os.path.join(SCRIPT_DIR, "logo.png")
 
-FUZZY_MATCH_THRESHOLD = 0.75
+FUZZY_MATCH_THRESHOLD = 0.8
 
-# --- Core Functions ---
+# --- Core Functions (No changes) ---
 
 def get_player_id_from_csv(username, db_dataframe):
     """[HYBRID] Fetches a player's Discord User ID using a robust two-step approach."""
@@ -39,75 +39,39 @@ def get_player_id_from_csv(username, db_dataframe):
     return None
 
 def extract_text_from_image(image):
-    """
-    [UPGRADED v3] Extracts text from an image using Pytesseract OCR
-    after applying an enhanced preprocessing pipeline for maximum accuracy.
-    """
+    """Extracts text from an image using Pytesseract OCR."""
     try:
-        processed_image = image.convert('L')
-        enhancer = ImageEnhance.Contrast(processed_image)
-        processed_image = enhancer.enhance(2)
-        processed_image = ImageOps.invert(processed_image)
-        processed_image = processed_image.point(lambda x: 0 if x < 128 else 255, '1')
         custom_config = r'--oem 3 --psm 6'
-        text = pytesseract.image_to_string(processed_image, config=custom_config)
+        text = pytesseract.image_to_string(image, config=custom_config)
         return text
     except Exception as e:
         st.error(f"An error occurred during OCR processing: {e}"); return None
 
-# --- MODIFIED FUNCTION (HYBRID PARSING LOGIC) ---
 def parse_leaderboard_text(text):
-    """
-    [UPGRADED v4 - Hybrid Parsing] Uses a two-pass approach for maximum accuracy.
-    1. Tries the 'longest word' method first for clean lines.
-    2. If that fails, it uses the 'anchor parsing' method as a robust fallback.
-    """
+    """[UPGRADED] Parses raw OCR text with improved accuracy for scores."""
     parsed_data = []
     lines = text.strip().split('\n')
-    number_pattern = re.compile(r'\b\d{1,3}(?:,\d{3})*|\d+\b')
-
-    for line in lines:
-        potential_name = ''
-        numbers_on_line = []
-
-        # --- PASS 1: Try the 'longest word' method ---
+    try:
+        start_index = next(i for i, line in enumerate(lines) if "leaderboard" in line.lower())
+        relevant_lines = lines[start_index + 1:]
+    except StopIteration:
+        relevant_lines = lines
+    for line in relevant_lines:
         name_candidates = []
-        words = line.split()
-        for word in words:
+        for word in line.split():
             cleaned_word = re.sub(r'[^\w-]', '', word).strip('-_')
             if cleaned_word and not cleaned_word.isdigit():
                 name_candidates.append(cleaned_word)
-        
-        if name_candidates:
-            longest_name = max(name_candidates, key=len)
-            try:
-                name_end_index = line.rfind(longest_name) + len(longest_name)
-                stats_part = line[name_end_index:]
-                # Check for numbers in the stats part
-                found_numbers = [int(n.replace(',', '')) for n in number_pattern.findall(stats_part)]
-                if found_numbers:
-                    potential_name = longest_name
-                    numbers_on_line = found_numbers
-            except (ValueError, IndexError):
-                pass # This pass failed, will go to fallback
-
-        # --- PASS 2: Fallback to 'anchor' method if Pass 1 failed ---
-        if not numbers_on_line:
-            match = number_pattern.search(line)
-            if match:
-                name_part = line[:match.start()].strip()
-                stats_part = line[match.start():]
-                cleaned_name = re.sub(r'[^\w\s-]', '', name_part).strip()
-                
-                if cleaned_name:
-                    potential_name = cleaned_name
-                    numbers_on_line = [int(n.replace(',', '')) for n in number_pattern.findall(stats_part)]
-
-        # --- Final Validation and Appending ---
-        if potential_name and len(potential_name) > 2 and numbers_on_line:
-            if potential_name.lower() not in ['people', 'coin', 'win', 'score', 'japan', 'usa', 'team']:
+        if not name_candidates: continue
+        potential_name = max(name_candidates, key=len)
+        try:
+            name_end_index = line.rfind(potential_name) + len(potential_name)
+            stats_part = line[name_end_index:]
+            numbers_on_line = [int(n.replace(',', '')) for n in re.findall(r'\b\d{1,3}(?:,\d{3})*|\d+\b', stats_part)]
+            if numbers_on_line and len(potential_name) > 2 and potential_name.lower() not in ['japan', 'usa', 'team']:
                 parsed_data.append({'name': potential_name, 'stats': numbers_on_line})
-                
+        except (ValueError, IndexError):
+            continue
     return parsed_data
 
 def format_discord_report(matched_discord_ids):
@@ -193,7 +157,7 @@ if uploaded_files:
                 st.image(uploaded_file, caption=f"Image {i+1}", width=150)
                 if st.button(f"View Full", key=f"view_{i}"):
                     st.session_state.show_image_index = i
-
+    
     if st.session_state.show_image_index != -1:
         with st.dialog(f"Viewing Image {st.session_state.show_image_index + 1}"):
             st.image(uploaded_files[st.session_state.show_image_index])
@@ -201,22 +165,18 @@ if uploaded_files:
                 st.session_state.show_image_index = -1
                 st.rerun()
 
-    st.info("Please select which numeric column represents the players' scores.")
-    score_column_map = {
-        "First Column": 0,
-        "Second Column": 1,
-        "Last Column": -1
-    }
-    selected_column_label = st.radio(
+    st.info("Please select which of the numeric columns represents the players' scores.")
+    # --- UPDATED: Radio button labels ---
+    score_column_options = ("First Column", "Second Column", "Third Column")
+    selected_column = st.radio(
         "Which column is the score?",
-        list(score_column_map.keys()),
+        score_column_options,
         horizontal=True,
-        index=2
     )
-    score_column_index = score_column_map[selected_column_label]
+    score_column_index = score_column_options.index(selected_column)
 
     st.write("---")
-
+    
     if st.button("Generate Discord Report from All Screenshots"):
         if player_db_df.empty:
             st.warning("Cannot process because the player database file is missing, empty, or has incorrect columns.")

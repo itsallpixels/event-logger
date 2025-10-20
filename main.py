@@ -11,7 +11,7 @@ import numpy as np
 
 # ==============================================================================
 # This is the definitive final version of the application.
-# It reverts to PSM 6 for robust text detection and adds raw OCR output for debugging.
+# It includes the CRITICAL FIX for the re.PatternError.
 # ==============================================================================
 
 # --- Robust Path Configuration ---
@@ -34,9 +34,16 @@ def preprocess_image_for_ocr(image):
 
 # --- Core Functions ---
 def get_player_id_from_csv(username, db_dataframe):
+    """[HYBRID & CORRECTED] Fetches a player's Discord User ID using a robust two-step approach."""
     if db_dataframe.empty: return None
-    contains_result = db_dataframe[db_dataframe['roblox_username'].str.lower().str.contains(username.lower(), na=False)]
+    
+    # --- THE CRITICAL FIX IS HERE ---
+    # By adding regex=False, we prevent crashes from special characters in the OCR output.
+    contains_result = db_dataframe[db_dataframe['roblox_username'].str.lower().str.contains(username.lower(), regex=False, na=False)]
+    
     if not contains_result.empty: return contains_result['discord_userid'].iloc[0]
+    
+    # Fuzzy fallback remains the same
     best_match_score = 0.0
     best_match_id = None
     for _, row in db_dataframe.iterrows():
@@ -47,13 +54,9 @@ def get_player_id_from_csv(username, db_dataframe):
     return None
 
 def extract_text_from_image(image):
-    """
-    [CORRECTED] Extracts text using the robust PSM 6 for multi-line blocks.
-    """
+    """Extracts text using the robust PSM 6 for multi-line blocks."""
     try:
         processed_image = preprocess_image_for_ocr(image)
-        # --- THE CRITICAL FIX IS HERE ---
-        # Reverting to PSM 6, which is designed for blocks of text like leaderboards.
         custom_config = r'--oem 3 --psm 6'
         text = pytesseract.image_to_string(processed_image, config=custom_config)
         return text
@@ -159,11 +162,11 @@ if uploaded_files:
                     raw_ocr_outputs += f"--- OCR Output for Image {i+1} ---\n{ocr_text}\n\n"
                     all_parsed_data.extend(parse_leaderboard_text(ocr_text))
         
-        st.session_state.raw_ocr_output = raw_ocr_outputs # Store for debugging
+        st.session_state.raw_ocr_output = raw_ocr_outputs
         
         if not all_parsed_data:
             st.error("OCR could not detect any text in any of the uploaded images.")
-            st.session_state.report_generated = True # Show the debug info even on failure
+            st.session_state.report_generated = True
             st.rerun()
         else:
             unique_players_dict = {player['name']: player for player in reversed(all_parsed_data)}
@@ -195,12 +198,10 @@ if st.session_state.report_generated:
     if st.session_state.get('players_with_scores'):
         st.dataframe(pd.DataFrame(st.session_state.players_with_scores), use_container_width=True)
     else:
-        # Don't show a warning if there was a total OCR failure
         if st.session_state.get('raw_ocr_output', '').strip():
             st.warning("No players from the leaderboard were found in the database to display scores.")
             
     with st.expander("See raw processing details"):
-        # --- NEW: Raw OCR Output for Debugging ---
         st.write("**Raw Text Detected by OCR:**")
         st.text_area("This is the raw text Tesseract found in the image(s) before parsing.", st.session_state.get('raw_ocr_output', 'No text was detected.'), height=200)
         st.write("**Final Parsed Player Data (Name & Stats):**"); st.json(st.session_state.get('unique_players', []))

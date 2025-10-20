@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageEnhance
 import pytesseract
 import os
 import re
@@ -18,7 +18,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_FILE = os.path.join(SCRIPT_DIR, "players.csv")
 LOGO_FILE = os.path.join(SCRIPT_DIR, "logo.png")
 
-FUZZY_MATCH_THRESHOLD = 0.8
+FUZZY_MATCH_THRESHOLD = 0.75
 
 # --- Core Functions ---
 
@@ -40,11 +40,13 @@ def get_player_id_from_csv(username, db_dataframe):
 
 def extract_text_from_image(image):
     """
-    [UPGRADED v2] Extracts text from an image using Pytesseract OCR
-    after applying preprocessing steps for much higher accuracy.
+    [UPGRADED v3] Extracts text from an image using Pytesseract OCR
+    after applying an enhanced preprocessing pipeline for maximum accuracy.
     """
     try:
         processed_image = image.convert('L')
+        enhancer = ImageEnhance.Contrast(processed_image)
+        processed_image = enhancer.enhance(2)
         processed_image = ImageOps.invert(processed_image)
         processed_image = processed_image.point(lambda x: 0 if x < 128 else 255, '1')
         custom_config = r'--oem 3 --psm 6'
@@ -53,32 +55,59 @@ def extract_text_from_image(image):
     except Exception as e:
         st.error(f"An error occurred during OCR processing: {e}"); return None
 
+# --- MODIFIED FUNCTION (HYBRID PARSING LOGIC) ---
 def parse_leaderboard_text(text):
-    """[UPGRADED] Parses raw OCR text with improved accuracy by pre-cleaning the stats string."""
+    """
+    [UPGRADED v4 - Hybrid Parsing] Uses a two-pass approach for maximum accuracy.
+    1. Tries the 'longest word' method first for clean lines.
+    2. If that fails, it uses the 'anchor parsing' method as a robust fallback.
+    """
     parsed_data = []
     lines = text.strip().split('\n')
-    try:
-        start_index = next(i for i, line in enumerate(lines) if "leaderboard" in line.lower())
-        relevant_lines = lines[start_index + 1:]
-    except StopIteration:
-        relevant_lines = lines
-    for line in relevant_lines:
+    number_pattern = re.compile(r'\b\d{1,3}(?:,\d{3})*|\d+\b')
+
+    for line in lines:
+        potential_name = ''
+        numbers_on_line = []
+
+        # --- PASS 1: Try the 'longest word' method ---
         name_candidates = []
-        for word in line.split():
+        words = line.split()
+        for word in words:
             cleaned_word = re.sub(r'[^\w-]', '', word).strip('-_')
             if cleaned_word and not cleaned_word.isdigit():
                 name_candidates.append(cleaned_word)
-        if not name_candidates: continue
-        potential_name = max(name_candidates, key=len)
-        try:
-            name_end_index = line.rfind(potential_name) + len(potential_name)
-            stats_part = line[name_end_index:]
-            cleaned_stats_part = re.sub(r'[^\d,\s]', '', stats_part)
-            numbers_on_line = [int(n.replace(',', '')) for n in re.findall(r'\b\d{1,3}(?:,\d{3})*|\d+\b', cleaned_stats_part)]
-            if numbers_on_line and len(potential_name) > 2 and potential_name.lower() not in ['japan', 'usa', 'team']:
+        
+        if name_candidates:
+            longest_name = max(name_candidates, key=len)
+            try:
+                name_end_index = line.rfind(longest_name) + len(longest_name)
+                stats_part = line[name_end_index:]
+                # Check for numbers in the stats part
+                found_numbers = [int(n.replace(',', '')) for n in number_pattern.findall(stats_part)]
+                if found_numbers:
+                    potential_name = longest_name
+                    numbers_on_line = found_numbers
+            except (ValueError, IndexError):
+                pass # This pass failed, will go to fallback
+
+        # --- PASS 2: Fallback to 'anchor' method if Pass 1 failed ---
+        if not numbers_on_line:
+            match = number_pattern.search(line)
+            if match:
+                name_part = line[:match.start()].strip()
+                stats_part = line[match.start():]
+                cleaned_name = re.sub(r'[^\w\s-]', '', name_part).strip()
+                
+                if cleaned_name:
+                    potential_name = cleaned_name
+                    numbers_on_line = [int(n.replace(',', '')) for n in number_pattern.findall(stats_part)]
+
+        # --- Final Validation and Appending ---
+        if potential_name and len(potential_name) > 2 and numbers_on_line:
+            if potential_name.lower() not in ['people', 'coin', 'win', 'score', 'japan', 'usa', 'team']:
                 parsed_data.append({'name': potential_name, 'stats': numbers_on_line})
-        except (ValueError, IndexError):
-            continue
+                
     return parsed_data
 
 def format_discord_report(matched_discord_ids):
@@ -173,24 +202,18 @@ if uploaded_files:
                 st.rerun()
 
     st.info("Please select which numeric column represents the players' scores.")
-
-    # --- KEY CHANGE STARTS HERE ---
-    # We now provide a "Last Column" option which is more robust.
     score_column_map = {
         "First Column": 0,
         "Second Column": 1,
-        "Last Column": -1  # Use negative index to always get the last element
+        "Last Column": -1
     }
-    # Get the user's selection from the radio button
     selected_column_label = st.radio(
         "Which column is the score?",
-        list(score_column_map.keys()), # The options are the keys from our map
+        list(score_column_map.keys()),
         horizontal=True,
-        index=2 # Default selection to "Last Column"
+        index=2
     )
-    # Translate the user's choice (e.g., "Last Column") into the correct index (e.g., -1)
     score_column_index = score_column_map[selected_column_label]
-    # --- KEY CHANGE ENDS HERE ---
 
     st.write("---")
 
@@ -219,7 +242,6 @@ if uploaded_files:
                         if discord_id:
                             matched_ids.append(str(discord_id))
                             try:
-                                # This line now works robustly with the new index (e.g., -1 for last)
                                 score = player['stats'][score_column_index]
                                 players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': score})
                             except IndexError:
@@ -252,4 +274,3 @@ if st.session_state.report_generated:
             if key != 'show_image_index': # Don't clear the dialog state
                 del st.session_state[key]
         st.rerun()
-

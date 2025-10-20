@@ -1,7 +1,4 @@
 streamlit
 pandas
-pillow
-numpy
-easyocr
-torch
-torchvision
+Pillow
+pytesseract

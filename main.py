@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageEnhance
 import pytesseract
 import os
 import re
@@ -18,7 +18,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_FILE = os.path.join(SCRIPT_DIR, "players.csv")
 LOGO_FILE = os.path.join(SCRIPT_DIR, "logo.png")
 
-FUZZY_MATCH_THRESHOLD = 0.8
+# --- KEY CHANGE 1: Lowering the threshold to be more lenient ---
+FUZZY_MATCH_THRESHOLD = 0.75
 
 # --- Core Functions ---
 
@@ -38,15 +39,28 @@ def get_player_id_from_csv(username, db_dataframe):
     if best_match_score >= FUZZY_MATCH_THRESHOLD: return best_match_id
     return None
 
+# --- MODIFIED FUNCTION ---
 def extract_text_from_image(image):
     """
-    [UPGRADED v2] Extracts text from an image using Pytesseract OCR
-    after applying preprocessing steps for much higher accuracy.
+    [UPGRADED v3] Extracts text from an image using Pytesseract OCR
+    after applying an enhanced preprocessing pipeline for maximum accuracy.
     """
     try:
+        # 1. Convert to grayscale.
         processed_image = image.convert('L')
+
+        # --- KEY CHANGE 2: Add a contrast enhancement step ---
+        # This makes the text "pop" from the background, helping the OCR engine.
+        enhancer = ImageEnhance.Contrast(processed_image)
+        processed_image = enhancer.enhance(2) # 2x contrast
+
+        # 3. Invert colors for dark-mode UIs.
         processed_image = ImageOps.invert(processed_image)
+
+        # 4. Apply a binary threshold to get a pure black and white image.
         processed_image = processed_image.point(lambda x: 0 if x < 128 else 255, '1')
+
+        # 5. Perform OCR on the clean, high-contrast image.
         custom_config = r'--oem 3 --psm 6'
         text = pytesseract.image_to_string(processed_image, config=custom_config)
         return text
@@ -173,24 +187,18 @@ if uploaded_files:
                 st.rerun()
 
     st.info("Please select which numeric column represents the players' scores.")
-
-    # --- KEY CHANGE STARTS HERE ---
-    # We now provide a "Last Column" option which is more robust.
     score_column_map = {
         "First Column": 0,
         "Second Column": 1,
-        "Last Column": -1  # Use negative index to always get the last element
+        "Last Column": -1
     }
-    # Get the user's selection from the radio button
     selected_column_label = st.radio(
         "Which column is the score?",
-        list(score_column_map.keys()), # The options are the keys from our map
+        list(score_column_map.keys()),
         horizontal=True,
-        index=2 # Default selection to "Last Column"
+        index=2
     )
-    # Translate the user's choice (e.g., "Last Column") into the correct index (e.g., -1)
     score_column_index = score_column_map[selected_column_label]
-    # --- KEY CHANGE ENDS HERE ---
 
     st.write("---")
 
@@ -219,7 +227,6 @@ if uploaded_files:
                         if discord_id:
                             matched_ids.append(str(discord_id))
                             try:
-                                # This line now works robustly with the new index (e.g., -1 for last)
                                 score = player['stats'][score_column_index]
                                 players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': score})
                             except IndexError:

@@ -1,16 +1,17 @@
 import streamlit as st
 import pandas as pd
-from PIL import Image, ImageOps
-import pytesseract
+from PIL import Image
 import os
 import re
 from difflib import SequenceMatcher
 import base64
+import easyocr  # Using a neural network-based OCR library
+import numpy as np
 
 # ==============================================================================
 # This is the definitive final version of the application.
-# It is streamlined for ATTENDANCE LOGGING and uses Image Preprocessing
-# for highly accurate name detection.
+# It uses a Neural Network (EasyOCR) for superior character recognition and
+# a coordinate-based parser for perfect, column-wise data extraction.
 # ==============================================================================
 
 # --- Robust Path Configuration ---
@@ -19,6 +20,14 @@ DATABASE_FILE = os.path.join(SCRIPT_DIR, "players.csv")
 LOGO_FILE = os.path.join(SCRIPT_DIR, "logo.png")
 
 FUZZY_MATCH_THRESHOLD = 0.8
+
+# --- Global EasyOCR Reader Initialization ---
+# This initializes the OCR model once and reuses it, which is much more efficient.
+@st.cache_resource
+def load_ocr_model():
+    return easyocr.Reader(['en'], gpu=False) # Use gpu=True if you have a compatible GPU
+
+reader = load_ocr_model()
 
 # --- Core Functions ---
 
@@ -38,58 +47,73 @@ def get_player_id_from_csv(username, db_dataframe):
     if best_match_score >= FUZZY_MATCH_THRESHOLD: return best_match_id
     return None
 
-# --- KEY CHANGE: Re-introducing the advanced image preprocessing function ---
-def extract_text_from_image(image):
-    """
-    [UPGRADED] Extracts text from an image using Pytesseract OCR
-    after applying preprocessing steps for much higher accuracy.
-    """
+def extract_text_from_image_nn(image):
+    """[NEURAL NETWORK] Extracts text and its coordinates from an image using EasyOCR."""
     try:
-        # 1. Convert to grayscale: Simplifies the image.
-        processed_image = image.convert('L')
-        
-        # 2. Invert colors: Tesseract prefers dark text on a light background.
-        processed_image = ImageOps.invert(processed_image)
-        
-        # 3. Apply a binary threshold: Converts the image to pure black and white,
-        #    removing all background noise, textures, and watermarks.
-        processed_image = processed_image.point(lambda x: 0 if x < 128 else 255, '1')
-        
-        # 4. Perform OCR on the clean image.
-        custom_config = r'--oem 3 --psm 6'
-        text = pytesseract.image_to_string(processed_image, config=custom_config)
-        return text
+        # Convert PIL image to a NumPy array, which is what EasyOCR needs
+        image_np = np.array(image)
+        # The 'detail=1' argument ensures we get coordinates, confidence, etc.
+        result = reader.readtext(image_np, detail=1)
+        return result
     except Exception as e:
-        st.error(f"An error occurred during OCR processing: {e}"); return None
+        st.error(f"An error occurred during Neural Network OCR processing: {e}")
+        return None
 
-def parse_leaderboard_text(text):
-    """[MODIFIED] Parses raw OCR text to extract only player names."""
-    parsed_names = []
-    lines = text.strip().split('\n')
-    try:
-        start_index = next(i for i, line in enumerate(lines) if "leaderboard" in line.lower())
-        relevant_lines = lines[start_index + 1:]
-    except StopIteration:
-        relevant_lines = lines
+def parse_leaderboard_nn(ocr_results):
+    """
+    [COORDINATE-BASED PARSING] Groups OCR results into rows and columns based on their
+    X and Y coordinates for perfect, column-wise separation.
+    """
+    if not ocr_results:
+        return []
+
+    # Group results into rows based on vertical position
+    rows = {}
+    for (bbox, text, prob) in ocr_results:
+        # Get the vertical center of the bounding box
+        y_center = (bbox[0][1] + bbox[2][1]) / 2
         
-    for line in relevant_lines:
-        name_candidates = []
-        for word in line.split():
-            cleaned_word = re.sub(r'[^\w-]', '', word).strip('-_')
-            if cleaned_word and not cleaned_word.isdigit():
-                name_candidates.append(cleaned_word)
+        # Find a nearby row to group with
+        found_row = False
+        for row_y in rows.keys():
+            if abs(y_center - row_y) < 20: # Tolerance for vertical alignment
+                rows[row_y].append((bbox[0][0], text)) # Store x-coordinate and text
+                found_row = True
+                break
         
-        if not name_candidates: continue
+        if not found_row:
+            rows[y_center] = [(bbox[0][0], text)]
+
+    # Process each row to extract name and stats
+    parsed_data = []
+    for row_y in sorted(rows.keys()):
+        # Sort items in the row by their horizontal position (left to right)
+        sorted_row = sorted(rows[row_y], key=lambda item: item[0])
         
-        potential_name = max(name_candidates, key=len)
+        # Combine text and numbers from the sorted row
+        text_parts = [item[1] for item in sorted_row]
         
-        if len(potential_name) > 2 and potential_name.lower() not in ['japan', 'usa', 'team', 'people', 'score', 'win', 'coin']:
-            parsed_names.append(potential_name)
+        # Separate name from stats
+        name_parts = []
+        stats = []
+        for part in text_parts:
+            cleaned_part = part.replace(',', '').replace('.', '')
+            if cleaned_part.isdigit():
+                stats.append(int(cleaned_part))
+            else:
+                name_parts.append(part)
+        
+        player_name = ' '.join(name_parts)
+        # Clean up the name from any OCR artifacts or icons
+        player_name = re.sub(r'[^\w\s-]', '', player_name).strip()
+
+        if len(player_name) > 2 and stats and player_name.lower() not in ['people', 'score', 'win', 'coin']:
+            parsed_data.append({'name': player_name, 'stats': stats})
             
-    return parsed_names
+    return parsed_data
 
 def format_discord_report(matched_discord_ids):
-    """Formats the final Discord markdown block with blank fields and a Note line."""
+    """Formats the final Discord markdown block."""
     report_lines = ["Event ID:", "Length:", "Host:", "Co-host:", "Attendees:"]
     if matched_discord_ids:
         for user_id in matched_discord_ids:
@@ -100,7 +124,7 @@ def format_discord_report(matched_discord_ids):
     return "\n".join(report_lines)
 
 def set_watermark(file_path):
-    """Reads a logo file, encodes it to base64, and sets it as a full-page watermark."""
+    """Sets a background watermark for the app."""
     try:
         with open(file_path, "rb") as image_file:
             encoded_string = base64.b64encode(image_file.read()).decode()
@@ -125,7 +149,7 @@ def set_watermark(file_path):
             unsafe_allow_html=True
         )
     except FileNotFoundError:
-        st.warning(f"Warning: Watermark file '{os.path.basename(file_path)}' not found. Please upload it to your GitHub repository.")
+        st.warning(f"Warning: Watermark file '{os.path.basename(file_path)}' not found.")
 
 # --- Page Config ---
 st.set_page_config(page_title="Blitzmarine Event-Logger", page_icon=LOGO_FILE, layout="wide")
@@ -136,10 +160,11 @@ if 'report_generated' not in st.session_state:
     st.session_state.report_generated = False
     st.session_state.discord_output = ""
     st.session_state.unique_players = []
+    st.session_state.players_with_scores = []
 
 # --- Main App ---
 st.title("Blitzmarine Event-Logger")
-st.write("Upload **one or more Roblox Leaderboard screenshots**. The app will combine the results, find unique players, and generate a single formatted event report.")
+st.write("Upload **one or more Roblox Leaderboard screenshots**. A neural network will read the players and scores to generate a formatted event report.")
 
 try:
     player_db_df = pd.read_csv(DATABASE_FILE)
@@ -147,7 +172,7 @@ try:
         st.error(f"Error: Your '{os.path.basename(DATABASE_FILE)}' must contain 'roblox_username' and 'discord_userid' columns.")
         player_db_df = pd.DataFrame()
 except FileNotFoundError:
-    st.error(f"Error: The database file '{os.path.basename(DATABASE_FILE)}' was not found in the GitHub repository. Please upload it.")
+    st.error(f"Error: The database file '{os.path.basename(DATABASE_FILE)}' was not found.")
     player_db_df = pd.DataFrame()
 
 uploaded_files = st.file_uploader(
@@ -162,35 +187,55 @@ if uploaded_files:
             st.image(uploaded_file, caption=f"Image {i+1}")
             if i < len(uploaded_files) - 1:
                 st.divider()
-    
+
+    st.info("Please select which column represents the players' scores.")
+    score_column_map = {"First Column": 0, "Second Column": 1, "Last Column": -1}
+    selected_column_label = st.radio(
+        "Which column is the score?",
+        list(score_column_map.keys()),
+        horizontal=True,
+        index=2
+    )
+    score_column_index = score_column_map[selected_column_label]
+
     st.write("---")
     
     if st.button("Generate Discord Report from All Screenshots"):
         if player_db_df.empty:
-            st.warning("Cannot process because the player database file is missing, empty, or has incorrect columns.")
+            st.warning("Cannot process because the player database is missing or invalid.")
         else:
-            all_parsed_names = []
-            with st.spinner(f"Step 1/2: Analyzing {len(uploaded_files)} screenshot(s)..."):
+            all_parsed_data = []
+            with st.spinner(f"Step 1/3: Analyzing {len(uploaded_files)} screenshot(s) with AI..."):
                 for uploaded_file in uploaded_files:
-                    image = Image.open(uploaded_file)
-                    ocr_text = extract_text_from_image(image)
-                    if ocr_text:
-                        names_from_image = parse_leaderboard_text(ocr_text)
-                        all_parsed_names.extend(names_from_image)
+                    image = Image.open(uploaded_file).convert("RGB")
+                    ocr_results = extract_text_from_image_nn(image)
+                    if ocr_results:
+                        data_from_image = parse_leaderboard_nn(ocr_results)
+                        all_parsed_data.extend(data_from_image)
             
-            if not all_parsed_names:
-                st.error("OCR could not detect any player names in any of the uploaded images.")
+            if not all_parsed_data:
+                st.error("The AI could not detect any leaderboard data in the uploaded images.")
             else:
-                st.session_state.unique_players = list(dict.fromkeys(all_parsed_names))
+                unique_players_dict = {player['name']: player for player in reversed(all_parsed_data)}
+                st.session_state.unique_players = list(unique_players_dict.values())
                 
-                with st.spinner("Step 2/2: Matching players and building report..."):
+                with st.spinner("Step 2/3: Matching players and extracting scores..."):
                     matched_ids = []
-                    for player_name in st.session_state.unique_players:
-                        discord_id = get_player_id_from_csv(player_name, player_db_df)
+                    players_with_scores = []
+                    for player in st.session_state.unique_players:
+                        discord_id = get_player_id_from_csv(player['name'], player_db_df)
                         if discord_id:
                             matched_ids.append(str(discord_id))
+                            try:
+                                score = player['stats'][score_column_index]
+                                players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': score})
+                            except IndexError:
+                                players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': 'N/A'})
                     
                     st.session_state.matched_ids = list(dict.fromkeys(matched_ids))
+                    st.session_state.players_with_scores = players_with_scores
+                
+                with st.spinner("Step 3/3: Building final report..."):
                     st.session_state.discord_output = format_discord_report(st.session_state.matched_ids)
                     st.session_state.report_generated = True
 
@@ -200,8 +245,15 @@ if st.session_state.report_generated:
     st.info("Click the copy icon in the top-right of the box below, then paste directly into Discord.")
     st.code(st.session_state.discord_output, language='markdown')
 
+    st.subheader("Player Scores")
+    if st.session_state.players_with_scores:
+        score_df = pd.DataFrame(st.session_state.players_with_scores)
+        st.dataframe(score_df, use_container_width=True)
+    else:
+        st.warning("No players from the leaderboard were found in the database to display scores.")
+
     with st.expander("See raw processing details"):
-        st.write("**Unique Player Names Found:**")
+        st.write("**Unique Player Data Found (Name & Stats):**")
         st.json(st.session_state.unique_players)
 
     if st.button("Start Over / Retry"):

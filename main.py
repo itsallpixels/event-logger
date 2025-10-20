@@ -11,7 +11,7 @@ import numpy as np
 
 # ==============================================================================
 # This is the definitive final version of the application.
-# It uses PSM 7 for Tesseract to fix number segmentation errors.
+# It reverts to PSM 6 for robust text detection and adds raw OCR output for debugging.
 # ==============================================================================
 
 # --- Robust Path Configuration ---
@@ -48,14 +48,13 @@ def get_player_id_from_csv(username, db_dataframe):
 
 def extract_text_from_image(image):
     """
-    [UPGRADED] Extracts text from an image using Pytesseract OCR after preprocessing
-    and with PSM 7 to improve number segmentation.
+    [CORRECTED] Extracts text using the robust PSM 6 for multi-line blocks.
     """
     try:
         processed_image = preprocess_image_for_ocr(image)
         # --- THE CRITICAL FIX IS HERE ---
-        # PSM 7 treats the image as a single line, which forces number grouping.
-        custom_config = r'--oem 3 --psm 7'
+        # Reverting to PSM 6, which is designed for blocks of text like leaderboards.
+        custom_config = r'--oem 3 --psm 6'
         text = pytesseract.image_to_string(processed_image, config=custom_config)
         return text
     except Exception as e:
@@ -151,13 +150,21 @@ if uploaded_files:
     st.write("---")
     if st.button("Generate Discord Report from All Screenshots"):
         all_parsed_data = []
+        raw_ocr_outputs = ""
         with st.spinner(f"Step 1/3: Preprocessing and analyzing {len(uploaded_files)} screenshot(s)..."):
-            for uploaded_file in uploaded_files:
+            for i, uploaded_file in enumerate(uploaded_files):
                 image = Image.open(uploaded_file)
                 ocr_text = extract_text_from_image(image)
-                if ocr_text: all_parsed_data.extend(parse_leaderboard_text(ocr_text))
+                if ocr_text:
+                    raw_ocr_outputs += f"--- OCR Output for Image {i+1} ---\n{ocr_text}\n\n"
+                    all_parsed_data.extend(parse_leaderboard_text(ocr_text))
+        
+        st.session_state.raw_ocr_output = raw_ocr_outputs # Store for debugging
+        
         if not all_parsed_data:
             st.error("OCR could not detect any text in any of the uploaded images.")
+            st.session_state.report_generated = True # Show the debug info even on failure
+            st.rerun()
         else:
             unique_players_dict = {player['name']: player for player in reversed(all_parsed_data)}
             st.session_state.unique_players = list(unique_players_dict.values())
@@ -188,11 +195,19 @@ if st.session_state.report_generated:
     if st.session_state.get('players_with_scores'):
         st.dataframe(pd.DataFrame(st.session_state.players_with_scores), use_container_width=True)
     else:
-        st.warning("No players from the leaderboard were found in the database to display scores.")
+        # Don't show a warning if there was a total OCR failure
+        if st.session_state.get('raw_ocr_output', '').strip():
+            st.warning("No players from the leaderboard were found in the database to display scores.")
+            
     with st.expander("See raw processing details"):
-        st.write("**Unique Player Data Found (Name & Stats):**"); st.json(st.session_state.get('unique_players', []))
+        # --- NEW: Raw OCR Output for Debugging ---
+        st.write("**Raw Text Detected by OCR:**")
+        st.text_area("This is the raw text Tesseract found in the image(s) before parsing.", st.session_state.get('raw_ocr_output', 'No text was detected.'), height=200)
+        st.write("**Final Parsed Player Data (Name & Stats):**"); st.json(st.session_state.get('unique_players', []))
+        
     if st.button("Start Over / Retry"):
         st.session_state.report_generated = False
         st.session_state.pop('unique_players', None); st.session_state.pop('players_with_scores', None)
         st.session_state.pop('discord_output', None); st.session_state.pop('matched_ids', None)
+        st.session_state.pop('raw_ocr_output', None)
         st.rerun()

@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from PIL import Image, ImageOps
+from PIL import Image
 import pytesseract
 import os
 import re
@@ -9,8 +9,8 @@ import base64
 
 # ==============================================================================
 # This is the definitive final version of the application.
-# It is streamlined for its core purpose, with interactive thumbnails
-# and highly accurate score parsing.
+# It is streamlined for its core purpose of ATTENDANCE LOGGING ONLY.
+# All score-related functionality has been removed.
 # ==============================================================================
 
 # --- Robust Path Configuration ---
@@ -39,47 +39,43 @@ def get_player_id_from_csv(username, db_dataframe):
     return None
 
 def extract_text_from_image(image):
-    """
-    [UPGRADED v2] Extracts text from an image using Pytesseract OCR
-    after applying preprocessing steps for much higher accuracy.
-    """
+    """Extracts text from an image using Pytesseract OCR."""
     try:
-        processed_image = image.convert('L')
-        processed_image = ImageOps.invert(processed_image)
-        processed_image = processed_image.point(lambda x: 0 if x < 128 else 255, '1')
         custom_config = r'--oem 3 --psm 6'
-        text = pytesseract.image_to_string(processed_image, config=custom_config)
+        text = pytesseract.image_to_string(image, config=custom_config)
         return text
     except Exception as e:
         st.error(f"An error occurred during OCR processing: {e}"); return None
 
 def parse_leaderboard_text(text):
-    """[UPGRADED] Parses raw OCR text with improved accuracy by pre-cleaning the stats string."""
-    parsed_data = []
+    """[MODIFIED] Parses raw OCR text to extract only player names."""
+    parsed_names = []
     lines = text.strip().split('\n')
     try:
+        # Try to find the start of the leaderboard to ignore headers
         start_index = next(i for i, line in enumerate(lines) if "leaderboard" in line.lower())
         relevant_lines = lines[start_index + 1:]
     except StopIteration:
         relevant_lines = lines
+        
     for line in relevant_lines:
         name_candidates = []
+        # Find all non-numeric "words" on a line
         for word in line.split():
             cleaned_word = re.sub(r'[^\w-]', '', word).strip('-_')
             if cleaned_word and not cleaned_word.isdigit():
                 name_candidates.append(cleaned_word)
+        
         if not name_candidates: continue
+        
+        # Assume the longest non-numeric word is the player's name
         potential_name = max(name_candidates, key=len)
-        try:
-            name_end_index = line.rfind(potential_name) + len(potential_name)
-            stats_part = line[name_end_index:]
-            cleaned_stats_part = re.sub(r'[^\d,\s]', '', stats_part)
-            numbers_on_line = [int(n.replace(',', '')) for n in re.findall(r'\b\d{1,3}(?:,\d{3})*|\d+\b', cleaned_stats_part)]
-            if numbers_on_line and len(potential_name) > 2 and potential_name.lower() not in ['japan', 'usa', 'team']:
-                parsed_data.append({'name': potential_name, 'stats': numbers_on_line})
-        except (ValueError, IndexError):
-            continue
-    return parsed_data
+        
+        # Add the name if it's a reasonable length and not a common header word
+        if len(potential_name) > 2 and potential_name.lower() not in ['japan', 'usa', 'team', 'people', 'score', 'win', 'coin']:
+            parsed_names.append(potential_name)
+            
+    return parsed_names
 
 def format_discord_report(matched_discord_ids):
     """Formats the final Discord markdown block with blank fields and a Note line."""
@@ -113,11 +109,6 @@ def set_watermark(file_path):
             [data-testid="stExpander"] summary {{ color: #FFD700; }}
             [data-testid="stInfo"] {{ border-left-color: #FFD700; }}
             [data-testid="stSpinner"] > div {{ border-top-color: #FFD700; }}
-            [data-testid="stProgressBar"] > div > div {{ background-image: linear-gradient(to right, #FFD700, #FFD700); }}
-            [data-testid="stRadio"] label {{ color: #E0E0E0; }}
-            [data-testid="stRadio"] label:hover {{ color: #FFD700 !important; }}
-            [data-testid="stRadio"] input:checked + div {{ border-color: #FFD700 !important; }}
-            [data-testid="stRadio"] input:checked + div::after {{ background-color: #FFD700 !important; }}
             </style>
             """,
             unsafe_allow_html=True
@@ -134,8 +125,6 @@ if 'report_generated' not in st.session_state:
     st.session_state.report_generated = False
     st.session_state.discord_output = ""
     st.session_state.unique_players = []
-    st.session_state.players_with_scores = []
-    st.session_state.show_image_index = -1
 
 # --- Main App ---
 st.title("Blitzmarine Event-Logger")
@@ -164,7 +153,7 @@ if uploaded_files:
                 st.image(uploaded_file, caption=f"Image {i+1}", width=150)
                 if st.button(f"View Full", key=f"view_{i}"):
                     st.session_state.show_image_index = i
-
+    
     if st.session_state.show_image_index != -1:
         with st.dialog(f"Viewing Image {st.session_state.show_image_index + 1}"):
             st.image(uploaded_files[st.session_state.show_image_index])
@@ -172,84 +161,50 @@ if uploaded_files:
                 st.session_state.show_image_index = -1
                 st.rerun()
 
-    st.info("Please select which numeric column represents the players' scores.")
-
-    # --- KEY CHANGE STARTS HERE ---
-    # We now provide a "Last Column" option which is more robust.
-    score_column_map = {
-        "First Column": 0,
-        "Second Column": 1,
-        "Last Column": -1  # Use negative index to always get the last element
-    }
-    # Get the user's selection from the radio button
-    selected_column_label = st.radio(
-        "Which column is the score?",
-        list(score_column_map.keys()), # The options are the keys from our map
-        horizontal=True,
-        index=2 # Default selection to "Last Column"
-    )
-    # Translate the user's choice (e.g., "Last Column") into the correct index (e.g., -1)
-    score_column_index = score_column_map[selected_column_label]
-    # --- KEY CHANGE ENDS HERE ---
-
     st.write("---")
-
+    
     if st.button("Generate Discord Report from All Screenshots"):
         if player_db_df.empty:
             st.warning("Cannot process because the player database file is missing, empty, or has incorrect columns.")
         else:
-            all_parsed_data = []
-            with st.spinner(f"Step 1/3: Analyzing {len(uploaded_files)} screenshot(s)..."):
+            all_parsed_names = []
+            with st.spinner(f"Step 1/2: Analyzing {len(uploaded_files)} screenshot(s)..."):
                 for uploaded_file in uploaded_files:
                     image = Image.open(uploaded_file)
                     ocr_text = extract_text_from_image(image)
                     if ocr_text:
-                        data_from_image = parse_leaderboard_text(ocr_text)
-                        all_parsed_data.extend(data_from_image)
-            if not all_parsed_data:
-                st.error("OCR could not detect any text in any of the uploaded images.")
+                        names_from_image = parse_leaderboard_text(ocr_text)
+                        all_parsed_names.extend(names_from_image)
+            
+            if not all_parsed_names:
+                st.error("OCR could not detect any player names in any of the uploaded images.")
             else:
-                unique_players_dict = {player['name']: player for player in reversed(all_parsed_data)}
-                st.session_state.unique_players = list(unique_players_dict.values())
-                with st.spinner("Step 2/3: Finding players, matching, and extracting scores..."):
+                # Remove duplicates while preserving order
+                st.session_state.unique_players = list(dict.fromkeys(all_parsed_names))
+                
+                with st.spinner("Step 2/2: Matching players and building report..."):
                     matched_ids = []
-                    players_with_scores = []
-                    for player in st.session_state.unique_players:
-                        discord_id = get_player_id_from_csv(player['name'], player_db_df)
+                    for player_name in st.session_state.unique_players:
+                        discord_id = get_player_id_from_csv(player_name, player_db_df)
                         if discord_id:
                             matched_ids.append(str(discord_id))
-                            try:
-                                # This line now works robustly with the new index (e.g., -1 for last)
-                                score = player['stats'][score_column_index]
-                                players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': score})
-                            except IndexError:
-                                players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': 'N/A'})
+                    
                     st.session_state.matched_ids = list(dict.fromkeys(matched_ids))
-                    st.session_state.players_with_scores = players_with_scores
-                    with st.spinner("Step 3/3: Building final report..."):
-                        st.session_state.discord_output = format_discord_report(st.session_state.matched_ids)
-                        st.session_state.report_generated = True
+                    st.session_state.discord_output = format_discord_report(st.session_state.matched_ids)
+                    st.session_state.report_generated = True
 
 if st.session_state.report_generated:
     st.write("---")
-    st.subheader("✅ Your Combined Discord Report is Ready!")
+    st.subheader("✅ Your Discord Report is Ready!")
     st.info("Click the copy icon in the top-right of the box below, then paste directly into Discord.")
     st.code(st.session_state.discord_output, language='markdown')
 
-    st.subheader("Player Scores")
-    if st.session_state.players_with_scores:
-        score_df = pd.DataFrame(st.session_state.players_with_scores)
-        st.dataframe(score_df, use_container_width=True)
-    else:
-        st.warning("No players from the leaderboard were found in the database to display scores.")
-
     with st.expander("See raw processing details"):
-        st.write("**Unique Player Data Found (Name & Stats):**")
+        st.write("**Unique Player Names Found:**")
         st.json(st.session_state.unique_players)
 
     if st.button("Start Over / Retry"):
         for key in list(st.session_state.keys()):
-            if key != 'show_image_index': # Don't clear the dialog state
+            if key != 'show_image_index':
                 del st.session_state[key]
         st.rerun()
-

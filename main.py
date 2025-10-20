@@ -20,7 +20,7 @@ LOGO_FILE = os.path.join(SCRIPT_DIR, "logo.png")
 
 FUZZY_MATCH_THRESHOLD = 0.8
 
-# --- Core Functions (No changes) ---
+# --- Core Functions (As provided by user) ---
 
 def get_player_id_from_csv(username, db_dataframe):
     """[HYBRID] Fetches a player's Discord User ID using a robust two-step approach."""
@@ -166,14 +166,28 @@ if uploaded_files:
                 st.rerun()
 
     st.info("Please select which of the numeric columns represents the players' scores.")
-    # --- UPDATED: Radio button labels ---
-    score_column_options = ("First Column", "Second Column", "Third Column")
-    selected_column = st.radio(
+    
+    # --- KEY CHANGE STARTS HERE: ROBUST INDEXING FOR RADIO BUTTONS ---
+    # A dictionary to map user-friendly labels to the correct Python index.
+    # -1 is Python's way of selecting the last item in a list.
+    score_column_map = {
+        "First Column": 0,
+        "Second Column": 1,
+        "Last Column": -1 
+    }
+    
+    # Create the radio button with the user-friendly labels.
+    # Default to "Last Column" as it's the most likely choice.
+    selected_column_label = st.radio(
         "Which column is the score?",
-        score_column_options,
+        list(score_column_map.keys()), # The options are ["First Column", "Second Column", "Last Column"]
         horizontal=True,
+        index=2 # Set the default selection to the third option ("Last Column")
     )
-    score_column_index = score_column_options.index(selected_column)
+    
+    # Get the correct index (0, 1, or -1) from the map based on the user's selection.
+    score_column_index = score_column_map[selected_column_label]
+    # --- KEY CHANGE ENDS HERE ---
 
     st.write("---")
     
@@ -202,6 +216,7 @@ if uploaded_files:
                         if discord_id:
                             matched_ids.append(str(discord_id))
                             try:
+                                # This line now correctly uses the robust index (0, 1, or -1)
                                 score = player['stats'][score_column_index]
                                 players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': score})
                             except IndexError:

@@ -9,8 +9,8 @@ import base64
 
 # ==============================================================================
 # This is the definitive final version of the application.
-# It is streamlined for its core purpose of ATTENDANCE LOGGING ONLY.
-# All score-related functionality has been removed.
+# It is streamlined for ATTENDANCE LOGGING ONLY and displays uploaded
+# images at full resolution in a hideable section.
 # ==============================================================================
 
 # --- Robust Path Configuration ---
@@ -52,7 +52,6 @@ def parse_leaderboard_text(text):
     parsed_names = []
     lines = text.strip().split('\n')
     try:
-        # Try to find the start of the leaderboard to ignore headers
         start_index = next(i for i, line in enumerate(lines) if "leaderboard" in line.lower())
         relevant_lines = lines[start_index + 1:]
     except StopIteration:
@@ -60,7 +59,6 @@ def parse_leaderboard_text(text):
         
     for line in relevant_lines:
         name_candidates = []
-        # Find all non-numeric "words" on a line
         for word in line.split():
             cleaned_word = re.sub(r'[^\w-]', '', word).strip('-_')
             if cleaned_word and not cleaned_word.isdigit():
@@ -68,10 +66,8 @@ def parse_leaderboard_text(text):
         
         if not name_candidates: continue
         
-        # Assume the longest non-numeric word is the player's name
         potential_name = max(name_candidates, key=len)
         
-        # Add the name if it's a reasonable length and not a common header word
         if len(potential_name) > 2 and potential_name.lower() not in ['japan', 'usa', 'team', 'people', 'score', 'win', 'coin']:
             parsed_names.append(potential_name)
             
@@ -146,21 +142,15 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
+    # --- KEY CHANGE: Replaced thumbnail grid with a hideable full-resolution viewer ---
     with st.expander(f"View the {len(uploaded_files)} uploaded screenshot(s)..."):
-        cols = st.columns(min(len(uploaded_files), 8))
         for i, uploaded_file in enumerate(uploaded_files):
-            with cols[i % 8]:
-                st.image(uploaded_file, caption=f"Image {i+1}", width=150)
-                if st.button(f"View Full", key=f"view_{i}"):
-                    st.session_state.show_image_index = i
+            # Displaying the image without a width constraint renders it at original resolution
+            st.image(uploaded_file, caption=f"Image {i+1}")
+            # Add a visual separator between images if there are more than one
+            if i < len(uploaded_files) - 1:
+                st.divider()
     
-    if st.session_state.show_image_index != -1:
-        with st.dialog(f"Viewing Image {st.session_state.show_image_index + 1}"):
-            st.image(uploaded_files[st.session_state.show_image_index])
-            if st.button("Close", key="close_dialog"):
-                st.session_state.show_image_index = -1
-                st.rerun()
-
     st.write("---")
     
     if st.button("Generate Discord Report from All Screenshots"):
@@ -179,7 +169,6 @@ if uploaded_files:
             if not all_parsed_names:
                 st.error("OCR could not detect any player names in any of the uploaded images.")
             else:
-                # Remove duplicates while preserving order
                 st.session_state.unique_players = list(dict.fromkeys(all_parsed_names))
                 
                 with st.spinner("Step 2/2: Matching players and building report..."):
@@ -204,7 +193,7 @@ if st.session_state.report_generated:
         st.json(st.session_state.unique_players)
 
     if st.button("Start Over / Retry"):
+        # Clear all items from session state to reset the app
         for key in list(st.session_state.keys()):
-            if key != 'show_image_index':
-                del st.session_state[key]
+            del st.session_state[key]
         st.rerun()

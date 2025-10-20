@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from PIL import Image
+from PIL import Image, ImageOps, ImageEnhance
 import pytesseract
 import os
 import re
@@ -18,9 +18,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_FILE = os.path.join(SCRIPT_DIR, "players.csv")
 LOGO_FILE = os.path.join(SCRIPT_DIR, "logo.png")
 
-FUZZY_MATCH_THRESHOLD = 0.8
+# Using a slightly more lenient threshold to work better with the advanced OCR
+FUZZY_MATCH_THRESHOLD = 0.75
 
-# --- Core Functions (As provided by user) ---
+# --- Core Functions ---
 
 def get_player_id_from_csv(username, db_dataframe):
     """[HYBRID] Fetches a player's Discord User ID using a robust two-step approach."""
@@ -38,17 +39,27 @@ def get_player_id_from_csv(username, db_dataframe):
     if best_match_score >= FUZZY_MATCH_THRESHOLD: return best_match_id
     return None
 
+# --- USING THE ADVANCED IMAGE PREPROCESSING FOR BEST SCORE DETECTION ---
 def extract_text_from_image(image):
-    """Extracts text from an image using Pytesseract OCR."""
+    """
+    [UPGRADED] Extracts text from an image using Pytesseract OCR
+    after applying an enhanced preprocessing pipeline for maximum accuracy.
+    """
     try:
+        processed_image = image.convert('L')
+        enhancer = ImageEnhance.Contrast(processed_image)
+        processed_image = enhancer.enhance(2)
+        processed_image = ImageOps.invert(processed_image)
+        processed_image = processed_image.point(lambda x: 0 if x < 128 else 255, '1')
         custom_config = r'--oem 3 --psm 6'
-        text = pytesseract.image_to_string(image, config=custom_config)
+        text = pytesseract.image_to_string(processed_image, config=custom_config)
         return text
     except Exception as e:
         st.error(f"An error occurred during OCR processing: {e}"); return None
 
+# --- USING THE PREFERRED "LONGEST WORD" METHOD FOR BEST NAME DETECTION ---
 def parse_leaderboard_text(text):
-    """[UPGRADED] Parses raw OCR text with improved accuracy for scores."""
+    """[UPGRADED] Parses raw OCR text with the 'longest word' method for names."""
     parsed_data = []
     lines = text.strip().split('\n')
     try:
@@ -167,27 +178,19 @@ if uploaded_files:
 
     st.info("Please select which of the numeric columns represents the players' scores.")
     
-    # --- KEY CHANGE STARTS HERE: ROBUST INDEXING FOR RADIO BUTTONS ---
-    # A dictionary to map user-friendly labels to the correct Python index.
-    # -1 is Python's way of selecting the last item in a list.
+    # --- USING THE ROBUST "LAST COLUMN" INDEXING LOGIC ---
     score_column_map = {
         "First Column": 0,
         "Second Column": 1,
         "Last Column": -1 
     }
-    
-    # Create the radio button with the user-friendly labels.
-    # Default to "Last Column" as it's the most likely choice.
     selected_column_label = st.radio(
         "Which column is the score?",
-        list(score_column_map.keys()), # The options are ["First Column", "Second Column", "Last Column"]
+        list(score_column_map.keys()),
         horizontal=True,
-        index=2 # Set the default selection to the third option ("Last Column")
+        index=2
     )
-    
-    # Get the correct index (0, 1, or -1) from the map based on the user's selection.
     score_column_index = score_column_map[selected_column_label]
-    # --- KEY CHANGE ENDS HERE ---
 
     st.write("---")
     
@@ -216,7 +219,6 @@ if uploaded_files:
                         if discord_id:
                             matched_ids.append(str(discord_id))
                             try:
-                                # This line now correctly uses the robust index (0, 1, or -1)
                                 score = player['stats'][score_column_index]
                                 players_with_scores.append({'Roblox Username': player['name'], 'Discord User ID': str(discord_id), 'Score': score})
                             except IndexError:

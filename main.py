@@ -20,7 +20,7 @@ LOGO_FILE = os.path.join(SCRIPT_DIR, "logo.png")
 
 FUZZY_MATCH_THRESHOLD = 0.8
 
-# --- Core Functions (No changes) ---
+# --- Core Functions ---
 
 def get_player_id_from_csv(username, db_dataframe):
     """[HYBRID] Fetches a player's Discord User ID using a robust two-step approach."""
@@ -47,8 +47,9 @@ def extract_text_from_image(image):
     except Exception as e:
         st.error(f"An error occurred during OCR processing: {e}"); return None
 
+# --- MODIFIED FUNCTION ---
 def parse_leaderboard_text(text):
-    """[UPGRADED] Parses raw OCR text with improved accuracy for scores."""
+    """[UPGRADED v2] Parses raw OCR text with improved accuracy by pre-cleaning the stats string."""
     parsed_data = []
     lines = text.strip().split('\n')
     try:
@@ -67,7 +68,16 @@ def parse_leaderboard_text(text):
         try:
             name_end_index = line.rfind(potential_name) + len(potential_name)
             stats_part = line[name_end_index:]
-            numbers_on_line = [int(n.replace(',', '')) for n in re.findall(r'\b\d{1,3}(?:,\d{3})*|\d+\b', stats_part)]
+
+            # --- KEY IMPROVEMENT STARTS HERE ---
+            # 1. Clean the stats string: Remove any character that isn't a digit, comma, or space.
+            # This is crucial for eliminating garbage characters from icons that interfere with number recognition.
+            cleaned_stats_part = re.sub(r'[^\d,\s]', '', stats_part)
+
+            # 2. Find numbers in the NEW, CLEANED string.
+            numbers_on_line = [int(n.replace(',', '')) for n in re.findall(r'\b\d{1,3}(?:,\d{3})*|\d+\b', cleaned_stats_part)]
+            # --- KEY IMPROVEMENT ENDS HERE ---
+
             if numbers_on_line and len(potential_name) > 2 and potential_name.lower() not in ['japan', 'usa', 'team']:
                 parsed_data.append({'name': potential_name, 'stats': numbers_on_line})
         except (ValueError, IndexError):
@@ -157,7 +167,7 @@ if uploaded_files:
                 st.image(uploaded_file, caption=f"Image {i+1}", width=150)
                 if st.button(f"View Full", key=f"view_{i}"):
                     st.session_state.show_image_index = i
-    
+
     if st.session_state.show_image_index != -1:
         with st.dialog(f"Viewing Image {st.session_state.show_image_index + 1}"):
             st.image(uploaded_files[st.session_state.show_image_index])
@@ -166,7 +176,6 @@ if uploaded_files:
                 st.rerun()
 
     st.info("Please select which of the numeric columns represents the players' scores.")
-    # --- UPDATED: Radio button labels ---
     score_column_options = ("First Column", "Second Column", "Third Column")
     selected_column = st.radio(
         "Which column is the score?",
@@ -176,7 +185,7 @@ if uploaded_files:
     score_column_index = score_column_options.index(selected_column)
 
     st.write("---")
-    
+
     if st.button("Generate Discord Report from All Screenshots"):
         if player_db_df.empty:
             st.warning("Cannot process because the player database file is missing, empty, or has incorrect columns.")

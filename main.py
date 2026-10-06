@@ -19,14 +19,25 @@ import io
 from dotenv import load_dotenv
 
 # Load environment variables silently from local .env if present
-load_dotenv()
+env_file = os.path.join(SCRIPT_DIR, ".env")
+if os.path.exists(env_file):
+    load_dotenv(dotenv_path=env_file)
+else:
+    load_dotenv()
 
 # --- Path & Config ---
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_CSV_FILE = os.path.join(SCRIPT_DIR, "players.csv")
 
 # Retrieve Gemini API key silently from environment or secrets without any UI prompt
-GEMINI_KEY = os.getenv("GEMINI_API_KEY") or (st.secrets.get("GEMINI_API_KEY", "") if hasattr(st, "secrets") else "")
+def get_clean_gemini_key():
+    raw_key = os.getenv("GEMINI_API_KEY")
+    if not raw_key and hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
+        raw_key = st.secrets["GEMINI_API_KEY"]
+    if raw_key:
+        return str(raw_key).strip().strip('"').strip("'")
+    return ""
+
+GEMINI_KEY = get_clean_gemini_key()
 
 # Set Page Config
 st.set_page_config(
@@ -215,9 +226,16 @@ def get_player_id(query_name: str, db_df: pd.DataFrame, threshold: float = 0.72)
 
 def extract_with_gemini(image, api_key: str):
     """Multimodal Vision OCR via Google Gemini (Free tier). 99.9% accurate on Roblox leaderboards."""
+    cleaned_key = str(api_key).strip().strip('"').strip("'")
+    if not cleaned_key:
+        return None
+    if not cleaned_key.startswith("AIzaSy"):
+        st.warning("Notice: Your GEMINI_API_KEY does not start with 'AIzaSy'. Google Gemini API keys from https://aistudio.google.com always begin with 'AIzaSy'. Falling back to local OCR...")
+        return None
+
     try:
         from google import genai
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(api_key=cleaned_key)
         prompt = '''
         Scan this Roblox leaderboard image. Extract all player usernames, display names, and attendee handles.
         Exclude score numbers, team names (e.g. USA, Japan, Spectator), and UI titles.
@@ -235,7 +253,11 @@ def extract_with_gemini(image, api_key: str):
             return [str(n).strip() for n in names if n]
         return [line.strip() for line in text.split('\n') if line.strip()]
     except Exception as e:
-        st.warning(f"Gemini API notice ({e}). Falling back to enhanced local computer vision...")
+        err_msg = str(e)
+        if "401" in err_msg or "UNAUTHENTICATED" in err_msg:
+            st.error("Gemini Authentication Error (401): The API key provided in .env or Streamlit Secrets is invalid or expired. Make sure you generated a free API key at https://aistudio.google.com (it should start with 'AIzaSy...').")
+        else:
+            st.warning(f"Gemini API notice: {err_msg}. Falling back to local OCR...")
         return None
 
 def extract_text_enhanced_cv(image):
@@ -307,9 +329,20 @@ with st.sidebar:
         help="Paste your published Google Sheet link or raw CSV URL. The app will auto-sync with this spreadsheet!"
     )
 
+    resync_password = st.text_input(
+        "Admin Password to Force Re-Sync",
+        type="password",
+        placeholder="Enter password to re-sync...",
+        help="Protected admin operation. Password required to clear cache and pull fresh data."
+    )
+
     if st.button("🔄 Force Re-Sync Spreadsheet"):
-        st.cache_data.clear()
-        st.success("Cache cleared! Reloading from spreadsheet...")
+        if resync_password == "differentialcalculus@123":
+            st.cache_data.clear()
+            st.success("Authorized! Cache cleared, re-fetching latest spreadsheet...")
+            st.rerun()
+        else:
+            st.error("Authentication failed: Incorrect password for Force Re-Sync.")
 
     st.divider()
 

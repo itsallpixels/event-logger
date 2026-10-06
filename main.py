@@ -16,10 +16,17 @@ from difflib import SequenceMatcher
 import json
 import urllib.request
 import io
+from dotenv import load_dotenv
+
+# Load environment variables silently from local .env if present
+load_dotenv()
 
 # --- Path & Config ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_CSV_FILE = os.path.join(SCRIPT_DIR, "players.csv")
+
+# Retrieve Gemini API key silently from environment or secrets without any UI prompt
+GEMINI_KEY = os.getenv("GEMINI_API_KEY") or (st.secrets.get("GEMINI_API_KEY", "") if hasattr(st, "secrets") else "")
 
 # Set Page Config
 st.set_page_config(
@@ -98,7 +105,7 @@ def load_database_from_url_or_file(sheet_url: str):
     # Attempt fetching from Google Sheet URL if provided
     if sheet_url and sheet_url.strip():
         fetch_url = sheet_url.strip()
-        # Convert standard Google Sheet sharing link to CSV export link
+        # Convert standard Google Sheet sharing link to CSV export
         if "docs.google.com/spreadsheets/d/" in fetch_url and "export?format=csv" not in fetch_url:
             match = re.search(r'/d/([a-zA-Z0-9-_]+)', fetch_url)
             if match:
@@ -152,9 +159,8 @@ def get_player_id(query_name: str, db_df: pd.DataFrame, threshold: float = 0.72)
     """
     Robust multi-strategy matching:
     1. Exact match on roblox_display or cleaned name
-    2. Clan tag normalized match (BM_Blast -> Blast_BM or Blast)
-    3. Substring match
-    4. Fuzzy ratio match (SequenceMatcher)
+    2. Substring & alias prefix matching
+    3. Fuzzy ratio match (SequenceMatcher)
     """
     if db_df.empty or not query_name:
         return None, None
@@ -307,17 +313,6 @@ with st.sidebar:
 
     st.divider()
 
-    # Free Gemini API Key (Optional)
-    st.subheader("🤖 AI Vision OCR (Free)")
-    gemini_key = st.text_input(
-        "Gemini API Key (Optional)",
-        value=st.secrets.get("GEMINI_API_KEY", ""),
-        type="password",
-        help="Free key from aistudio.google.com. Gives 99.9% accuracy on Roblox leaderboards with no bugs."
-    )
-
-    st.divider()
-
     # Event Meta
     st.subheader("📋 Event Meta")
     event_id = st.text_input("Event ID", value="BM-EVT-01")
@@ -365,8 +360,8 @@ with tab_scan:
                     for uploaded_file in uploaded_files:
                         image = Image.open(uploaded_file)
                         names = None
-                        if gemini_key:
-                            names = extract_with_gemini(image, gemini_key)
+                        if GEMINI_KEY:
+                            names = extract_with_gemini(image, GEMINI_KEY)
                         if not names:
                             ocr_text = extract_text_enhanced_cv(image)
                             names = parse_leaderboard_text(ocr_text)

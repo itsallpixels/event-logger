@@ -18,15 +18,16 @@ import urllib.request
 import io
 from dotenv import load_dotenv
 
+# --- Path & Config ---
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+LOCAL_CSV_FILE = os.path.join(SCRIPT_DIR, "players.csv")
+
 # Load environment variables silently from local .env if present
 env_file = os.path.join(SCRIPT_DIR, ".env")
 if os.path.exists(env_file):
     load_dotenv(dotenv_path=env_file)
 else:
     load_dotenv()
-
-# --- Path & Config ---
-LOCAL_CSV_FILE = os.path.join(SCRIPT_DIR, "players.csv")
 
 # Retrieve Gemini API key silently from environment or secrets without any UI prompt
 def get_clean_gemini_key():
